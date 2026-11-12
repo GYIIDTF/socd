@@ -1,0 +1,19 @@
+# 构建产物
+/target/
+/release/
+/dist/
+
+# 本地临时文件
+/temp/
+
+# Python
+__pycache__/
+*.pyc
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 运行时生成的图标预览（make_icon.py 产出，仅供人眼检查）
+/assets/icon-preview.png

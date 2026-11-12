@@ -1,0 +1,1831 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>恨海情天 · SOCD</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
+<style>
+
+
+  /* ==================================================================
+
+     藏青 + 酒红 + 中性灰
+
+
+
+     藏青做基调与主色，酒红只留给「对向模式」这一处语义，其余全是
+
+     带一点蓝调的灰阶。三段式层次：藏青顶栏 → 白色主区 → 浅蓝卡片。
+
+     ================================================================== */
+
+  :root {
+
+    /* 纯黑白灰。层级全靠明度差，没有色相干扰。 */
+
+    --black: #111111;
+
+    --ink: #1a1a1a;
+
+    --ink-2: #3d3d3d;
+
+    --ink-3: #1a1a1a;
+
+    --ink-4: #1a1a1a;
+
+    --ink-5: #b8b8b8;
+
+
+
+    --line: #dcdcdc;
+
+    --line-strong: #c4c4c4;
+
+
+
+    --surface: #f7f7f7;
+
+    --surface-2: #efefef;
+
+    --surface-3: #e6e6e6;
+    /* 悬停：浅底元素变深一档，深底元素变亮一档 */
+    --hover-on-light: #ffffff;
+    --hover-on-tint: #e9e9e9;
+
+    --surface-4: #dcdcdc;
+
+    --white: #ffffff;
+
+
+
+    /* 语义映射 */
+
+    --md-primary: var(--ink);
+
+    --md-on-primary: #ffffff;
+
+    --md-primary-container: #e6e6e6;
+
+    --md-on-primary-container: var(--black);
+
+
+
+    --md-secondary-container: #e6e6e6;
+
+    --md-on-secondary-container: var(--ink);
+
+
+
+    --md-tertiary: var(--ink-2);
+
+    --md-tertiary-container: #e6e6e6;
+
+    --md-on-tertiary-container: var(--black);
+
+
+
+    --md-surface: var(--surface);
+
+    --md-surface-container-lowest: var(--white);
+
+    --md-surface-container-low: var(--surface-2);
+
+    --md-surface-container-high: var(--surface-4);
+
+
+
+    --md-on-surface: var(--ink);
+
+    --md-on-surface-variant: var(--ink-3);
+
+    --md-outline: var(--ink-4);
+
+    --md-outline-variant: var(--line);
+
+
+
+    /* 圆角按控件高度取约 15-18%，不是固定值。
+
+       34px 高的按钮用 4px，48px 高的键帽用 6px。 */
+
+    --md-corner-xs: 3px;
+
+    --md-corner-sm: 4px;
+
+    --md-corner-md: 6px;
+
+    --md-corner-lg: 10px;
+
+    --md-corner-full: 999px;
+
+
+
+    --md-font: "Roboto", "Segoe UI Variable Text", "Segoe UI",
+
+               "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+
+
+
+    --md-ease: cubic-bezier(0.2, 0, 0, 1);
+
+    --md-dur: 180ms;
+
+  }
+
+
+
+  * { box-sizing: border-box; }
+
+
+
+  html, body {
+
+    margin: 0;
+
+    height: 100%;
+
+    background: var(--md-surface);
+
+    color: var(--md-on-surface);
+
+    font-family: var(--md-font);
+
+    font-size: 14px;
+
+    line-height: 1.43;
+
+    letter-spacing: 0.25px;
+
+    -webkit-font-smoothing: antialiased;
+
+    overflow: hidden;
+
+  }
+
+
+
+  @media (prefers-reduced-motion: reduce) {
+
+    * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+
+  }
+
+
+
+  :focus-visible {
+
+    outline: 2px solid var(--md-primary);
+
+    outline-offset: 2px;
+
+    border-radius: 3px;
+
+  }
+
+
+
+  /* ---------------- 骨架 ---------------- */
+
+
+
+  .app {
+
+    height: 100vh;
+
+    display: grid;
+
+    grid-template-rows: auto minmax(0, 1fr);
+
+  }
+
+
+
+  .body {
+
+    display: grid;
+
+    grid-template-columns: 264px minmax(0, 1fr);
+
+    min-height: 0;
+
+  }
+
+
+
+  /* ---------------- 顶栏 ---------------- */
+
+
+
+  .app-bar {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 12px;
+
+    height: 56px;
+
+    padding: 0 16px 0 20px;
+
+    background: #f0f0f0;
+
+    border-bottom: 1px solid var(--md-outline-variant);
+
+  }
+
+
+
+  /* 与托盘、标签页用的是同一份图标资源，保证各处一致 */
+
+  .app-bar-icon {
+
+    width: 32px;
+
+    height: 32px;
+
+    border-radius: var(--md-corner-md);
+
+    flex: none;
+
+    object-fit: contain;
+
+  }
+
+
+
+  /* 单行标题，加粗 */
+  .app-bar-title {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: .01em;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+
+
+
+
+  /* 状态胶囊 */
+
+  .chip {
+
+    margin-left: auto;
+
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: 8px;
+
+    height: 32px;
+
+    padding: 0 14px 0 11px;
+
+    border-radius: var(--md-corner-sm);
+
+    border: 1px solid var(--md-outline-variant);
+
+    background: #ffffff;
+
+    color: var(--md-on-surface-variant);
+
+    font-size: 12px;
+
+    letter-spacing: .4px;
+
+    white-space: nowrap;
+
+    max-width: 340px;
+
+    overflow: hidden;
+
+    transition: background var(--md-dur) var(--md-ease),
+
+                border-color var(--md-dur) var(--md-ease),
+
+                color var(--md-dur) var(--md-ease);
+
+  }
+
+  .chip .dot {
+
+    width: 8px; height: 8px;
+
+    border-radius: 50%;
+
+    background: #b8b8b8;
+
+    flex: none;
+
+    transition: background var(--md-dur) var(--md-ease);
+
+  }
+
+  .chip.on {
+
+    background: var(--md-secondary-container);
+
+    border-color: transparent;
+
+    color: var(--md-on-secondary-container);
+
+  }
+
+  .chip.on .dot { background: var(--md-primary); }
+
+  .chip span.label { overflow: hidden; text-overflow: ellipsis; }
+
+
+
+  /* ---------------- 左侧配置栏 ---------------- */
+
+
+
+  .tabs {
+
+    display: flex;
+
+    flex-direction: column;
+
+    padding: 12px 10px;
+
+    background: #f0f0f0;
+
+    border-right: 1px solid var(--md-outline-variant);
+
+    overflow-y: auto;
+
+    scrollbar-width: thin;
+
+    scrollbar-color: var(--md-outline-variant) transparent;
+
+    min-height: 0;
+
+    justify-content: space-between;
+
+  }
+
+  .tabs::-webkit-scrollbar { width: 6px; }
+
+  .tabs::-webkit-scrollbar-thumb {
+
+    background: var(--md-outline-variant);
+
+    border-radius: 99px;
+
+  }
+
+
+
+  .tabs-label {
+
+    font-size: 11px;
+
+    font-weight: 500;
+
+    letter-spacing: .5px;
+
+    color: var(--ink);
+
+    padding: 4px 12px 10px;
+
+    flex: none;
+
+  }
+
+
+
+  .tab {
+
+    position: relative;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 8px;
+
+    height: 40px;
+
+    padding: 0 12px;
+
+    margin-bottom: 2px;
+
+    border-radius: var(--md-corner-sm);
+
+    font-size: 14px;
+
+    font-weight: 500;
+
+    letter-spacing: .1px;
+
+    color: var(--md-on-surface-variant);
+
+    cursor: pointer;
+
+    white-space: nowrap;
+
+    flex: none;
+
+    transition: color var(--md-dur) var(--md-ease),
+
+                background var(--md-dur) var(--md-ease);
+
+  }
+
+  .tab:hover { background: var(--hover-on-tint); }
+
+  .tab.active {
+
+    background: var(--md-primary);
+
+    color: #fff;
+
+  }
+
+  /* 全局是所有程序都生效的兜底项，未选中时也加粗，
+     和具体程序名的常规字重区分开 */
+  .tab.global .tab-name { font-weight: 700; }
+
+  .tab .led {
+
+    width: 6px; height: 6px;
+
+    border-radius: 50%;
+
+    background: transparent;
+
+    flex: none;
+
+  }
+
+  .tab.live .led { background: #4ade80; }
+
+  .tab.active.live .led { background: #86efac; }
+
+  .tab-name {
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+  }
+
+
+
+  /* 侧栏底部操作 */
+
+  .tab-actions {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 6px;
+
+    margin-top: auto;
+
+    padding: 12px 2px 0;
+
+    border-top: 1px solid var(--md-outline-variant);
+
+    flex: none;
+
+  }
+
+  .side-btn {
+
+    font: inherit;
+
+    font-size: 13px;
+
+    font-weight: 500;
+
+    letter-spacing: .1px;
+
+    height: 34px;
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 5px;
+
+    border: 1px solid var(--md-outline-variant);
+
+    border-radius: var(--md-corner-sm);
+
+    background: rgba(255, 255, 255, .5);
+
+    color: var(--md-on-surface-variant);
+
+    cursor: pointer;
+
+    transition: background var(--md-dur) var(--md-ease),
+
+                border-color var(--md-dur) var(--md-ease),
+
+                color var(--md-dur) var(--md-ease);
+
+  }
+
+  .tab-actions .side-btn { flex: 1; }
+
+  /* 所有 side-btn 共用同一套悬停反馈：底色变白、边框加深、文字变黑。
+     删除按钮不例外——它们视觉上属于同一族按钮，只在语义上不同。 */
+  .side-btn:hover {
+    background: var(--hover-on-light);
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+
+
+
+  /* ---------------- 主区 ---------------- */
+
+
+
+  .main {
+
+    overflow-y: auto;
+
+    min-height: 0;
+
+    padding: 20px 24px 24px;
+
+    background: #ffffff;
+
+    scrollbar-width: thin;
+
+    scrollbar-color: var(--md-outline-variant) transparent;
+
+  }
+
+  .main::-webkit-scrollbar { width: 10px; }
+
+  .main::-webkit-scrollbar-thumb {
+
+    background: var(--md-outline-variant);
+
+    border-radius: 99px;
+
+  }
+
+
+
+  .section-head {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 12px;
+
+    margin-bottom: 10px;
+
+  }
+
+  .section-title {
+
+    font-size: 16px;
+
+    font-weight: 500;
+
+    letter-spacing: .15px;
+
+    color: var(--md-on-surface);
+
+  }
+
+
+
+  /* ---------------- 映射行 ---------------- */
+
+
+
+  .rows { display: flex; flex-direction: column; gap: 10px; }
+
+
+
+  .row {
+
+    display: grid;
+
+    grid-template-columns: 128px 44px 128px minmax(0, 1fr) auto 40px;
+
+    align-items: center;
+
+    min-height: 68px;
+
+    gap: 12px;
+
+    padding: 10px 14px;
+
+    border-radius: var(--md-corner-lg);
+
+    background: #f7f7f7;
+
+    transition: background var(--md-dur) var(--md-ease);
+
+  }
+
+  .row:hover { background: var(--hover-on-tint); }
+
+
+
+  /* 键位：浅灰底 + 6px 圆角 */
+
+  .cap {
+
+    height: 48px;
+
+    min-height: 48px;
+
+    max-height: 48px;
+
+    box-sizing: border-box;
+
+    align-self: center;
+
+    border-radius: var(--md-corner-md);
+
+    background: #e6e6e6;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    padding: 0 12px;
+
+    cursor: pointer;
+
+    border: 2px solid transparent;
+
+    transition: background var(--md-dur) var(--md-ease),
+
+                border-color var(--md-dur) var(--md-ease);
+
+  }
+
+  .cap:hover { background: #dcdcdc; }
+
+  .cap > span {
+
+    font-size: 15px;
+
+    font-weight: 500;
+
+    letter-spacing: .1px;
+
+    color: var(--ink);
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    white-space: nowrap;
+
+  }
+
+  .cap.source > span { color: var(--ink); font-weight: 600; }
+
+
+
+  /* 空键位 */
+
+  /* 空键位：虚线用伪元素绝对定位画，完全脱离布局，
+
+     外框尺寸与实心键严格一致。 */
+
+  .cap.empty {
+
+    position: relative;
+
+    background: transparent;
+
+    border: 2px solid transparent;
+
+    box-shadow: none;
+
+    height: 48px;
+
+    min-height: 48px;
+
+    max-height: 48px;
+
+    align-self: center;
+
+    padding: 0 12px;
+
+  }
+
+  .cap.empty::before {
+
+    content: "";
+
+    position: absolute;
+
+    inset: 0;
+
+    border: 1px dashed var(--line-strong);
+
+    border-radius: inherit;
+
+    pointer-events: none;
+
+  }
+
+  .cap.source.empty > span,
+
+  .cap.empty > span {
+
+    font-size: 16px;
+
+    font-weight: 400;
+
+    letter-spacing: 0;
+
+    color: var(--ink-4);
+
+    white-space: nowrap;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    text-align: center;
+
+  }
+
+  .cap.empty:hover::before { border-color: var(--ink); }
+
+  .cap.empty:hover { background: var(--hover-on-light); }
+
+  .cap.empty:hover > span { color: var(--ink); }
+
+
+
+  .cap.capturing {
+
+    background: var(--md-primary-container);
+
+    border-color: var(--md-primary);
+
+    border-style: solid;
+
+  }
+
+  .cap.capturing > span {
+
+    color: var(--md-on-primary-container);
+
+    font-size: 12px;
+
+    animation: blink 1.2s var(--md-ease) infinite;
+
+  }
+
+  @keyframes blink { 50% { opacity: .4; } }
+
+
+
+  /* 箭头：两种模式同尺寸同色，只靠形状区分 */
+
+  .arrow {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    width: 44px;
+
+    height: 28px;
+
+    color: var(--md-outline);
+
+  }
+
+  .arrow svg {
+
+    width: 26px;
+
+    height: 16px;
+
+    display: block;
+
+    flex: none;
+
+  }
+
+
+
+  /* ---------------- 模式选择 ---------------- */
+
+
+
+  /* 模式按钮组：外框与侧栏「新建」按钮同款——8px 圆角、1px 描边；
+
+     内部每个选项之间用同色细线分隔，整体读作一个控件。 */
+
+  .modes {
+
+    display: inline-flex;
+
+    justify-self: end;
+
+    border: 1px solid var(--md-outline-variant);
+
+    border-radius: var(--md-corner-sm);
+
+    background: rgba(255, 255, 255, .5);
+
+    overflow: hidden;
+
+  }
+
+  /* 按钮组内部不能有圆角，否则分隔处会出现缺口 */
+
+  .modes button {
+
+    font: inherit;
+
+    font-size: 12px;
+
+    font-weight: 500;
+
+    letter-spacing: .1px;
+
+    height: 32px;
+
+    padding: 0 13px;
+
+    border: none;
+
+    border-right: 1px solid var(--md-outline-variant);
+
+    background: transparent;
+
+    color: var(--md-on-surface-variant);
+
+    cursor: pointer;
+
+    white-space: nowrap;
+
+    transition: background var(--md-dur) var(--md-ease),
+
+                color var(--md-dur) var(--md-ease);
+
+  }
+
+  .modes button:last-child { border-right: none; }
+
+  .modes button:hover { background: var(--hover-on-light); color: var(--ink); }
+
+  /* 选中：黑底白字。这是整个界面上最强的对比，用来标记"当前生效的模式"。 */
+
+  .modes button[aria-pressed="true"] {
+
+    background: var(--black);
+
+    color: #ffffff;
+
+  }
+
+  .modes button[aria-pressed="true"]:hover { background: #000000; }
+
+
+
+  .del {
+
+    font: inherit;
+
+    font-size: 14px;
+
+    width: 30px; height: 30px;
+
+    justify-self: end;
+
+    border-radius: var(--md-corner-sm);
+
+    border: none;
+
+    background: transparent;
+
+    color: var(--ink);
+
+    cursor: pointer;
+
+    display: grid;
+
+    place-items: center;
+
+    transition: background var(--md-dur) var(--md-ease), color var(--md-dur) var(--md-ease);
+
+  }
+
+  /* 与 side-btn 同一套悬停反馈：变白 + 文字变黑 */
+  .del:hover { background: var(--hover-on-light); color: var(--ink); }
+
+
+
+  /* ---------------- 空状态 ---------------- */
+
+
+
+  .empty {
+
+    display: flex;
+
+    flex-direction: column;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 8px;
+
+    min-height: 280px;
+
+    padding: 32px;
+
+    text-align: center;
+
+  }
+
+  .empty-icon {
+
+    width: 60px; height: 60px;
+
+    border-radius: var(--md-corner-md);
+
+    background: #efefef;
+
+    color: var(--ink);
+
+    display: grid;
+
+    place-items: center;
+
+    margin-bottom: 6px;
+
+  }
+
+  .empty-title {
+
+    font-size: 15px;
+
+    font-weight: 500;
+
+    letter-spacing: .15px;
+
+    color: var(--md-on-surface);
+
+  }
+
+  .empty-hint {
+
+    font-size: 13px;
+
+    letter-spacing: .25px;
+
+    color: var(--md-on-surface-variant);
+
+    max-width: 320px;
+
+    line-height: 1.55;
+
+  }
+
+
+
+  /* ---------------- 底栏 ---------------- */
+
+
+
+
+
+  /* ---------------- 对话框 ---------------- */
+
+
+
+  .scrim {
+
+    position: fixed;
+
+    inset: 0;
+
+    background: rgba(19, 28, 43, .38);
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    z-index: 40;
+
+  }
+
+  .scrim.hidden { display: none; }
+
+
+
+  .dialog {
+
+    width: 500px;
+
+    max-width: calc(100vw - 40px);
+
+    max-height: 76vh;
+
+    background: #ffffff;
+
+    border-radius: var(--md-corner-lg);
+
+    display: flex;
+
+    flex-direction: column;
+
+    overflow: hidden;
+
+    box-shadow: 0 24px 56px rgba(19, 28, 43, .22);
+
+  }
+
+
+
+  .dialog-head {
+
+    padding: 18px 20px 12px;
+
+    border-bottom: 1px solid var(--line);
+
+  }
+
+  .dialog-title {
+
+    font-size: 15px;
+
+    font-weight: 500;
+
+    letter-spacing: .1px;
+
+    color: var(--ink);
+
+  }
+
+  .dialog-desc {
+
+    font-size: 13px;
+
+    letter-spacing: .25px;
+
+    color: var(--md-on-surface-variant);
+
+    margin-top: 6px;
+
+    line-height: 1.5;
+
+  }
+
+
+
+  .field { padding: 12px 20px; }
+
+  .field input {
+
+    font: inherit;
+
+    font-size: 13px;
+
+    width: 100%;
+
+    height: 34px;
+
+    padding: 0 10px;
+
+    background: #ffffff;
+
+    border: 1px solid var(--line-strong);
+
+    border-radius: var(--md-corner-sm);
+
+    color: var(--md-on-surface);
+
+    outline: none;
+
+    transition: border-color var(--md-dur) var(--md-ease);
+
+  }
+
+  .field input::placeholder { color: var(--ink); }
+
+  .field input:focus { border-color: var(--md-primary); }
+
+
+
+  .proc-list {
+
+    overflow-y: auto;
+
+    min-height: 120px;
+
+    max-height: 300px;
+
+    padding: 0 12px 10px;
+
+  }
+
+  .proc-list::-webkit-scrollbar { width: 8px; }
+
+  .proc-list::-webkit-scrollbar-thumb {
+
+    background: var(--md-outline-variant);
+
+    border-radius: 99px;
+
+  }
+
+  .proc {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    gap: 12px;
+
+    height: 32px;
+
+    padding: 0 8px;
+
+    border-radius: var(--md-corner-sm);
+
+    font-size: 12.5px;
+
+    color: var(--ink);
+
+    cursor: pointer;
+
+    transition: background var(--md-dur) var(--md-ease);
+
+  }
+
+  .proc:hover { background: var(--hover-on-tint); }
+
+  .proc.selected {
+
+    background: var(--black);
+
+    color: #ffffff;
+
+  }
+
+  .proc .tag {
+
+    font-size: 11px;
+
+    letter-spacing: .4px;
+
+    color: var(--ink);
+
+  }
+
+
+
+  .dialog-foot {
+
+    display: flex;
+
+    justify-content: flex-end;
+
+    gap: 8px;
+
+    padding: 12px 20px 16px;
+
+    border-top: 1px solid var(--line);
+
+  }
+
+  .dialog-foot .side-btn { flex: none; padding: 0 18px; }
+
+  /* 主操作：黑底白字 */
+
+  .side-btn.primary {
+
+    background: var(--black);
+
+    border-color: var(--black);
+
+    color: #ffffff;
+
+  }
+
+  .side-btn.primary:hover { background: #000000; border-color: #000000; color: #ffffff; }
+
+
+
+  /* ---------------- 提示 ---------------- */
+
+
+
+  .toast {
+
+    position: fixed;
+
+    left: 50%;
+
+    bottom: 20px;
+
+    transform: translateX(-50%) translateY(8px);
+
+    padding: 10px 16px;
+
+    border-radius: var(--md-corner-sm);
+
+    background: var(--black);
+
+    color: #ffffff;
+
+    font-size: 12.5px;
+
+    letter-spacing: .25px;
+
+    opacity: 0;
+
+    pointer-events: none;
+
+    transition: opacity var(--md-dur) var(--md-ease),
+
+                transform var(--md-dur) var(--md-ease);
+
+    z-index: 60;
+
+    max-width: calc(100vw - 40px);
+
+  }
+
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .toast.error { background: #8a1f1f; }
+
+
+
+  /* 窄屏：键位收窄、按钮组字号减小，保证四段按钮完整可见不重叠 */
+
+  @media (max-width: 1000px) {
+
+    .body { grid-template-columns: 200px minmax(0, 1fr); }
+
+    .row {
+
+      grid-template-columns: 96px 28px 96px minmax(0, 1fr) auto 32px;
+
+      gap: 8px;
+
+      padding: 9px 10px;
+
+    }
+
+    .modes button { padding: 0 9px; font-size: 11px; }
+
+  }
+
+
+
+  /* 更窄：模式按钮组换到第二行，靠右对齐，彻底避免与键位争宽度 */
+
+  @media (max-width: 820px) {
+
+    .body { grid-template-columns: 172px minmax(0, 1fr); }
+
+    .row {
+
+      grid-template-columns: 88px 24px 88px minmax(0, 1fr) 30px;
+
+      grid-template-areas:
+
+        "src arrow dst . del"
+
+        ".   .     modes modes modes";
+
+      row-gap: 8px;
+
+      padding: 10px;
+
+    }
+
+    .row > .cap.source        { grid-area: src; }
+
+    .row > .arrow             { grid-area: arrow; }
+
+    .row > .cap:not(.source)  { grid-area: dst; }
+
+    .row > .modes             { grid-area: modes; justify-self: end; }
+
+    .row > .del               { grid-area: del; }
+
+    /* 第二行只放按钮组时，中间那个占位 span 不参与布局 */
+
+    .row > span:not([class])  { display: none; }
+
+  }
+
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="app-bar">
+    <img class="app-bar-icon" src="/icon.png" alt="" aria-hidden="true">
+    <span class="app-bar-title">恨海情天 · SOCD</span>
+
+    <div class="chip" id="status-chip">
+      <span class="dot"></span>
+      <span class="label" id="status-text">等待目标程序</span>
+    </div>
+  </header>
+
+  <div class="body">
+    <nav class="tabs" id="tabs"></nav>
+
+    <main class="main">
+      <div class="section-head">
+        <span style="flex:1"></span>
+        <button class="side-btn" id="btn-add-mapping">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          添加映射
+        </button>
+      </div>
+      <div class="rows" id="rows"></div>
+    </main>
+  </div>
+</div>
+
+<!-- 新建配置 -->
+<div class="scrim hidden" id="add-dialog" role="dialog" aria-modal="true">
+  <div class="dialog">
+    <div class="dialog-head">
+      <div class="dialog-title">新建配置</div>
+      <div class="dialog-desc">选择一个正在运行的程序。映射只在它位于前台时生效。</div>
+    </div>
+
+    <div class="field">
+      <input id="program-search" placeholder="输入或选择程序，如 game.exe"
+             autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="proc-list" id="program-list"></div>
+
+    <div class="dialog-foot">
+      <button class="side-btn" id="add-cancel">取消</button>
+      <button class="side-btn primary" id="add-confirm">添加</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+
+/* =============== 与核心通信 =============== */
+
+const TOKEN = "__SOCD_TOKEN__";
+let nextId = 1;
+
+async function invoke(command, payload) {
+  const body = JSON.stringify({
+    token: TOKEN,
+    id: String(nextId++),
+    command,
+    payload: payload ?? null,
+  });
+
+  const res = await fetch("/api", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+
+  if (!res.ok) {
+    throw new Error(res.status === 403 ? "界面令牌失效，请重新打开" : "核心进程没有响应");
+  }
+
+  const msg = await res.json();
+  if (!msg.ok) throw new Error(msg.error || "操作失败");
+  return msg.data;
+}
+
+/* =============== 状态 =============== */
+
+let state = null;
+let capture = null;
+let toastTimer = null;
+
+function notify(message, isError) {
+  const el = document.getElementById("toast");
+  el.textContent = message;
+  el.classList.toggle("error", !!isError);
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+const MODE_SHORT = {
+  REMAP: "重映射",
+  OPPOSITE: "后按生效",
+  OPPOSITE_NO_REPRESS: "不重按",
+  NEUTRAL: "相互抵消",
+};
+
+/* =============== 渲染 =============== */
+
+function render() {
+  if (!state) return;
+  renderStatus();
+  renderTabs();
+  renderRows();
+}
+
+function renderStatus() {
+  const chip = document.getElementById("status-chip");
+  const label = document.getElementById("status-text");
+  const armed = state.armedProgram;
+
+  // 全局配置对所有程序生效，没有"等待目标程序"这回事
+  const cur = state.profiles[state.activeIndex];
+  const isGlobal = cur && !cur.program;
+  chip.style.display = isGlobal ? "none" : "";
+
+  if (isGlobal) return;
+
+  chip.classList.toggle("on", !!armed);
+  label.textContent = armed ? `对 ${armed} 生效中` : "等待目标程序";
+}
+
+function renderTabs() {
+  const host = document.getElementById("tabs");
+  host.innerHTML = `<div class="tabs-label">配置</div>`;
+
+  state.profiles.forEach((p, i) => {
+    const isActive = i === state.activeIndex;
+    const isLive = !!p.program && p.program === state.armedProgram;
+    const tab = document.createElement("div");
+    tab.className = "tab"
+      + (isActive ? " active" : "")
+      + (isLive ? " live" : "")
+      + (p.program ? "" : " global");
+    tab.innerHTML =
+      `<span class="led"></span>` +
+      `<span class="tab-name">${esc(p.program || "全局")}</span>`;
+    tab.title = p.program || "全局 · 对所有程序生效";
+    tab.onclick = () => selectProfile(i);
+    host.appendChild(tab);
+  });
+
+  const cur = state.profiles[state.activeIndex];
+  const isGlobal = !cur || !cur.program;
+  const canDelete = state.profiles.length > 1 && !isGlobal;
+
+  const actions = document.createElement("div");
+  actions.className = "tab-actions";
+  actions.innerHTML = `
+    <button class="side-btn" id="tab-add">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      新建
+    </button>
+    ${canDelete ? `
+    <button class="side-btn danger" id="tab-del">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
+      </svg>
+      删除
+    </button>` : ""}
+  `;
+  host.appendChild(actions);
+
+  actions.querySelector("#tab-add").onclick = openDialog;
+  const delBtn = actions.querySelector("#tab-del");
+  if (delBtn) delBtn.onclick = deleteCurrentProfile;
+}
+
+function arrowSvg(isRemap) {
+  // 两种箭头同画布、同线宽、同箭头头尺寸、同跨度，只靠单头/双头区分
+  if (isRemap) {
+    return `<svg viewBox="0 0 26 16" fill="none">
+      <path d="M1 8h17" stroke="currentColor" stroke-width="1.5" stroke-linecap="butt"/>
+      <path d="M18 4.2L25 8l-7 3.8z" fill="currentColor" stroke="none"/>
+    </svg>`;
+  }
+  return `<svg viewBox="0 0 26 16" fill="none">
+    <path d="M7 8h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="butt"/>
+    <path d="M7 4.2L1 8l6 3.8z" fill="currentColor" stroke="none"/>
+    <path d="M19 4.2l6 3.8-6 3.8z" fill="currentColor" stroke="none"/>
+  </svg>`;
+}
+
+function renderRows() {
+  const host = document.getElementById("rows");
+  host.innerHTML = "";
+
+  const profile = state.profiles[state.activeIndex];
+  if (!profile) return;
+
+  if (profile.mappings.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.innerHTML = `
+      <div class="empty-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="6" width="20" height="12" rx="2.5"/>
+          <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/>
+        </svg>
+      </div>
+      <div class="empty-title">还没有任何映射</div>
+      <div class="empty-hint">点右上角「添加映射」，再按下一个键来指定。</div>
+    `;
+    host.appendChild(empty);
+    return;
+  }
+
+  profile.mappings.forEach((m, i) => {
+    const isOpposite = m.mode !== "REMAP";
+    const capSrc = capture && capture.mappingIndex === i && capture.side === "source";
+    const capDst = capture && capture.mappingIndex === i && capture.side === "destination";
+
+    const srcText = capSrc ? "按下按键" : (m.sourceName || "+");
+    const dstText = capDst ? "按下按键" : (m.destinationName || "+");
+    const srcEmpty = !m.sourceName && !capSrc;
+    const dstEmpty = !m.destinationName && !capDst;
+
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = `
+      <div class="cap source ${capSrc ? "capturing" : ""} ${srcEmpty ? "empty" : ""}"
+           data-side="source" role="button" tabindex="0">
+        <span>${srcText}</span>
+      </div>
+      <div class="arrow">${arrowSvg(!isOpposite)}</div>
+      <div class="cap ${capDst ? "capturing" : ""} ${dstEmpty ? "empty" : ""}"
+           data-side="destination" role="button" tabindex="0">
+        <span>${dstText}</span>
+      </div>
+      <span></span>
+      <div class="modes ${isOpposite ? "opposite" : ""}"></div>
+      <button class="del" title="删除这条映射" aria-label="删除这条映射">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
+        </svg>
+      </button>
+    `;
+
+    const modes = row.querySelector(".modes");
+    state.modes.forEach(opt => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = MODE_SHORT[opt.value] || opt.label;
+      b.title = opt.hint;
+      b.setAttribute("aria-pressed", opt.value === m.mode ? "true" : "false");
+      b.onclick = (e) => {
+        e.stopPropagation();
+        updateMode(i, opt.value);
+      };
+      modes.appendChild(b);
+    });
+
+    row.querySelector(".del").onclick = () => deleteMapping(i);
+
+    const srcEl = row.querySelector('[data-side="source"]');
+    const dstEl = row.querySelector('[data-side="destination"]');
+    srcEl.onclick = () => beginCapture(i, "source");
+    dstEl.onclick = () => beginCapture(i, "destination");
+    srcEl.onkeydown = dstEl.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        beginCapture(i, e.currentTarget.dataset.side);
+      }
+    };
+
+    host.appendChild(row);
+  });
+}
+
+/* =============== 操作 =============== */
+
+async function selectProfile(i) {
+  try {
+    state = await invoke("selectProfile", { index: i });
+    render();
+  } catch (e) { notify(e.message, true); }
+}
+
+async function deleteMapping(i) {
+  try {
+    state = await invoke("deleteMapping", { index: i });
+    render();
+  } catch (e) { notify(e.message, true); }
+}
+
+async function updateMode(i, mode) {
+  try {
+    state = await invoke("updateMappingMode", { index: i, mode });
+    render();
+  } catch (e) { notify(e.message, true); }
+}
+
+async function deleteCurrentProfile() {
+  if (!state || state.profiles.length <= 1) return;
+  const name = state.profiles[state.activeIndex].program || "全局配置";
+  try {
+    state = await invoke("deleteProfile", { index: state.activeIndex });
+    render();
+    notify(`已删除 ${name}`);
+  } catch (e) { notify(e.message, true); }
+}
+
+/* =============== 捕获按键 =============== */
+
+function cancelCapture() {
+  if (capture) {
+    capture = null;
+    renderRows();
+  }
+}
+
+function beginCapture(mappingIndex, side) {
+  cancelCapture();
+  capture = { mappingIndex, side };
+  renderRows();
+
+  const handler = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === "Escape") { cleanup(); return; }
+    cleanup();
+
+    const profile = state.profiles[state.activeIndex];
+    const m = profile && profile.mappings[mappingIndex];
+    if (!m) { capture = null; renderRows(); return; }
+
+    const next = { source: m.source, destination: m.destination, mode: m.mode };
+
+    invoke("resolveVirtualKey", { vk: e.keyCode })
+      .then(({ scan }) => {
+        next[side] = scan;
+        capture = null;
+        return invoke("updateMappingBinding", {
+          index: mappingIndex,
+          source: next.source,
+          destination: next.destination,
+          mode: next.mode,
+        });
+      })
+      .then((s) => { state = s; render(); })
+      .catch(() => {
+        capture = null;
+        renderRows();
+        notify("这个按键无法映射", true);
+      });
+  };
+
+  // 点击键位以外的任何地方都取消捕获。用 mousedown 而不是 click：
+  // click 在鼠标抬起时才触发，期间按键可能已被捕获。
+  const onOutside = (e) => {
+    if (e.target.closest(".cap")) return;
+    cleanup();
+  };
+
+  function cleanup() {
+    window.removeEventListener("keydown", handler, true);
+    document.removeEventListener("mousedown", onOutside, true);
+    if (capture) { capture = null; renderRows(); }
+  }
+
+  window.addEventListener("keydown", handler, true);
+  document.addEventListener("mousedown", onOutside, true);
+}
+
+/* =============== 新建配置 =============== */
+
+const dialog = document.getElementById("add-dialog");
+const procList = document.getElementById("program-list");
+const search = document.getElementById("program-search");
+let runningPrograms = [];
+
+function renderProcs() {
+  const q = search.value.trim().toLowerCase();
+  const items = runningPrograms.filter(p => !q || p.toLowerCase().includes(q));
+  procList.innerHTML = "";
+
+  if (items.length === 0) {
+    const d = document.createElement("div");
+    d.className = "empty";
+    d.style.minHeight = "100px";
+    d.innerHTML = q
+      ? `<div class="empty-hint">没有匹配「${esc(q)}」的进程，可以直接点「添加」使用这个名字。</div>`
+      : `<div class="empty-hint">没有检测到正在运行的程序。</div>`;
+    procList.appendChild(d);
+    return;
+  }
+
+  items.slice(0, 200).forEach(name => {
+    const d = document.createElement("div");
+    d.className = "proc" + (search.value === name ? " selected" : "");
+    d.innerHTML = `<span>${esc(name)}</span><span class="tag">选择</span>`;
+    d.onclick = () => { search.value = name; renderProcs(); };
+    d.ondblclick = () => { search.value = name; confirmAdd(); };
+    procList.appendChild(d);
+  });
+}
+
+async function openDialog() {
+  try {
+    const res = await invoke("listPrograms");
+    runningPrograms = res.programs || [];
+  } catch { runningPrograms = []; }
+  search.value = "";
+  renderProcs();
+  dialog.classList.remove("hidden");
+  search.focus();
+}
+
+function closeDialog() { dialog.classList.add("hidden"); }
+
+async function confirmAdd() {
+  const name = search.value.trim();
+  if (!name) { notify("请先选择或输入一个程序名", true); return; }
+  try {
+    state = await invoke("addProfile", { program: name });
+    closeDialog();
+    render();
+  } catch (e) { notify(e.message, true); }
+}
+
+/* =============== 事件绑定 =============== */
+
+document.getElementById("add-cancel").onclick = closeDialog;
+document.getElementById("add-confirm").onclick = confirmAdd;
+dialog.onclick = (e) => { if (e.target === dialog) closeDialog(); };
+search.oninput = renderProcs;
+search.onkeydown = (e) => {
+  if (e.key === "Enter") confirmAdd();
+  if (e.key === "Escape") closeDialog();
+};
+
+document.getElementById("btn-add-mapping").onclick = async () => {
+  if (!state) return;
+  try {
+    state = await invoke("addMapping", {});
+    render();
+    beginCapture(state.profiles[state.activeIndex].mappings.length - 1, "source");
+  } catch (e) { notify(e.message, true); }
+};
+
+setInterval(async () => {
+  if (capture) return;
+  try {
+    const s = await invoke("getState");
+    if (s) { state = s; renderStatus(); }
+  } catch { /* 核心忙，下一轮再试 */ }
+}, 800);
+
+(async () => {
+  try {
+    state = await invoke("getState");
+    render();
+    // ?dialog=1 直接打开新建弹窗，便于截图与调试
+    if (new URLSearchParams(location.search).get("dialog") === "1") openDialog();
+  } catch (err) {
+    document.getElementById("status-text").textContent = "无法连接核心进程";
+    notify(err.message, true);
+  }
+})();
+</script>
+</body>
+</html>
