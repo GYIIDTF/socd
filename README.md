@@ -60,8 +60,10 @@ Windows 下的按键重映射工具，专为格斗游戏与横版平台的方向
 
 1. 从 [Releases](../../releases) 下载 `SOCD.exe`
 2. 放到一个可写目录（**不要放 `Program Files`**，程序需要在旁边生成配置）
-3. 双击运行，浏览器会自动打开配置界面
-4. 托盘图标常驻；关掉标签页不影响映射，左键点托盘图标可重新打开
+3. 双击运行。首次启动会打开配置界面，之后都是静默启动，只留托盘图标
+4. 需要改配置时，左键点托盘图标打开界面。关掉标签页不影响映射
+
+启动参数：`--open` 强制这次打开界面；`--port=N` 固定服务端口（自动化测试用，正常不需要）。
 
 程序只监听 `127.0.0.1`，端口由系统随机分配，每次启动生成一次性令牌注入页面。别的网页即使猜到端口也拿不到令牌，无法驱动你的键盘映射。
 
@@ -126,7 +128,7 @@ GNU 工具链需要 `cargo`、`rustc` 与 MinGW 的 `dlltool` 在 `PATH` 中。�
 cargo test
 
 # 端到端：先启动一个固定端口的实例
-SOCD_INSTANCE_SLOT=t ./release/SOCD.exe --no-open --port=17654
+SOCD_INSTANCE_SLOT=t ./release/SOCD.exe --port=17654
 
 python tests/e2e_func.py 17654     # 21 项：经真实命令通道驱动状态机
 python tests/e2e_real.py 17654     # 5 项：真实 Win32 钩子回调 + 按键注入

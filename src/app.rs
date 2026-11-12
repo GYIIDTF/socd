@@ -96,6 +96,9 @@ pub struct App {
     pub hook: Arc<HookState>,
     pub armed: Option<String>,
     pub guard: Option<win::HookGuard>,
+    /// 本次启动是否生成了全新配置。首次运行需要提示用户去托盘找界面，
+    /// 否则静默启动看起来像什么都没发生。
+    pub first_run: bool,
 }
 
 impl App {
@@ -120,6 +123,7 @@ impl App {
             hook: Arc::new(HookState::new()),
             armed: None,
             guard: None,
+            first_run,
         };
 
         if app.settings.profiles.is_empty() {

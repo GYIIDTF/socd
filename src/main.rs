@@ -64,8 +64,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     build_tray(url.clone())?;
 
-    // 默认启动即打开浏览器；带 --no-open 时留给托盘图标。
-    if !std::env::args().any(|a| a == "--no-open") {
+    // 静默启动：只驻留托盘，不动用户正在用的窗口。
+    //
+    // 两个例外：首次运行（桌面上什么都不出现，用户不知道该点托盘）和显式
+    // 传入 --open 时，才把界面打开。之后每次启动都不再弹。
+    let first_run = app.lock().map(|a| a.first_run).unwrap_or(false);
+    if first_run || std::env::args().any(|a| a == "--open") {
         server::open_browser(&url);
     }
 
