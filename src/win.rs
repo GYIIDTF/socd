@@ -257,18 +257,41 @@ fn inject_scancode(scan: u32, key_up: bool) {
 /// The page cannot know scan codes, and `MapVirtualKey` alone cannot tell an
 /// arrow key from the numpad clone, so extended keys are handled explicitly.
 pub fn vk_to_scan(vk: u32) -> Option<u32> {
-    const EXTENDED_VKS: &[u32] = &[
-        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, // pgup pgdn end home arrows? (see below)
-        0x2D, 0x2E, // insert delete
-        0x90, 0x2C, 0x13, 0x91, // numlock printscreen pause scrolllock
-        0x6F, 0x0D, 0xA3, 0xA5, 0x5B, 0x5C, // numpad / enter rctrl ralt lwin rwin
+    // 这些键的物理扫描码是固定的扩展码，`MapVirtualKeyW` 给不出来：
+    // 媒体键返回的是"同名的普通键"扫描码（音量静音→0x20 即 D 键），
+    // 菜单键/PrintScreen 返回不带扩展标记的错误值，Pause 直接返回 0。
+    // 拿错值比拿不到更糟——用户按音量键，被改掉的却是 D 键。
+    const FIXED: &[(u32, u32)] = &[
+        (0x5D, 0xE15D), // 菜单键
+        (0x2C, 0xE137), // PrintScreen
+        (0x13, 0x45),   // Pause（Ctrl+Pause 的前半）
+        (0xAD, 0xE020), // 音量静音
+        (0xAE, 0xE02E), // 音量减
+        (0xAF, 0xE030), // 音量加
+        (0xB0, 0xE019), // 下一首
+        (0xB1, 0xE010), // 上一首
+        (0xB2, 0xE024), // 停止
+        (0xB3, 0xE022), // 播放/暂停
+        (0xA6, 0xE16A), // 浏览器后退
+        (0xA7, 0xE169), // 浏览器前进
+        (0xA8, 0xE168), // 浏览器刷新
+        (0xA9, 0xE167), // 浏览器停止
+        (0xAA, 0xE165), // 浏览器搜索
+        (0xAB, 0xE166), // 浏览器收藏
+        (0xAC, 0xE132), // 浏览器主页
+        (0xB4, 0xE06B), // 邮件
+        (0xB5, 0xE06C), // 媒体选择
+        (0xB6, 0xE06D), // 应用 1
+        (0xB7, 0xE06E), // 应用 2
     ];
-    // 0x25-0x28 are the arrow keys and are extended.
-    let _ = EXTENDED_VKS;
+    if let Some(&(_, scan)) = FIXED.iter().find(|(v, _)| *v == vk) {
+        return Some(scan);
+    }
 
+    // 其余扩展键：MapVirtualKeyW 返回的扫描码本身正确，只差扩展标记。
     let extended = matches!(
         vk,
-        0x21..=0x28 | 0x2D..=0x2E | 0x90 | 0x2C | 0x13 | 0x91 | 0x6F | 0xA3 | 0xA5 | 0x5B | 0x5C
+        0x21..=0x28 | 0x2D..=0x2E | 0x90 | 0x91 | 0x6F | 0xA3 | 0xA5 | 0x5B | 0x5C
     );
 
     let scan = unsafe {
@@ -285,6 +308,13 @@ const MAPVK_VK_TO_VSC: u32 = 0;
 /// Reads the timestamp field out of a `KBDLLHOOKSTRUCT`; kept for parity with
 /// the debug view's ordering needs.
 pub fn key_name(scan: u32) -> String {
+    // 媒体键、菜单键这类，GetKeyNameTextW 给不出可用的名字：
+    // 音量静音会显示成 "D"（扩展 0x20 和普通 D 同码），播放显示成 "G"。
+    // 这些键直接按扫描码给中文名，不走系统查询。
+    if let Some(name) = media_key_name(scan) {
+        return name.to_string();
+    }
+
     let extended = scan & EXTENDED_TAG != 0;
     let lparam = (scan & 0xFF) << 16 | if extended { 1 << 24 } else { 0 };
     let mut buf = [0u16; 128];
@@ -295,6 +325,33 @@ pub fn key_name(scan: u32) -> String {
     }
     let raw = String::from_utf16_lossy(&buf[..len as usize]);
     localize_key_name(&raw)
+}
+
+/// 系统命名不可靠的键，按扫描码直接给名字。
+fn media_key_name(scan: u32) -> Option<&'static str> {
+    Some(match scan {
+        0xE020 => "音量静音",
+        0xE02E => "音量减",
+        0xE030 => "音量加",
+        0xE019 => "下一首",
+        0xE010 => "上一首",
+        0xE024 => "停止",
+        0xE022 => "播放/暂停",
+        0xE16A => "浏览器后退",
+        0xE169 => "浏览器前进",
+        0xE168 => "浏览器刷新",
+        0xE167 => "浏览器停止",
+        0xE165 => "浏览器搜索",
+        0xE166 => "浏览器收藏",
+        0xE132 => "浏览器主页",
+        0xE06B => "邮件",
+        0xE06C => "媒体选择",
+        0xE06D => "应用键 1",
+        0xE06E => "应用键 2",
+        0xE15D => "菜单键",
+        0xE137 => "PrintScreen",
+        _ => return None,
+    })
 }
 
 /// Windows hands back English key names for the non-printing keys. Letter and
@@ -339,7 +396,7 @@ fn localize_key_name(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::localize_key_name;
+    use super::{key_name, localize_key_name, vk_to_scan};
 
     #[test]
     fn letters_and_digits_pass_through() {
@@ -355,6 +412,37 @@ mod tests {
         assert_eq!(localize_key_name("Left"), "←");
         assert_eq!(localize_key_name("Up"), "↑");
         assert_eq!(localize_key_name("Page Down"), "下翻页");
+    }
+
+    /// 媒体键、菜单键、PrintScreen 的物理扫描码是固定的扩展码。
+    /// 这些必须走固定表：MapVirtualKeyW 会把音量静音映射成 0x20（D 键），
+    /// 用户按音量键会把 D 改掉。
+    #[test]
+    fn media_keys_use_real_scan_codes() {
+        assert_eq!(vk_to_scan(0xAD), Some(0xE020), "音量静音不能是 D 键");
+        assert_eq!(vk_to_scan(0xAE), Some(0xE02E), "音量减不能是 C 键");
+        assert_eq!(vk_to_scan(0xAF), Some(0xE030), "音量加不能是 B 键");
+        assert_eq!(vk_to_scan(0xB3), Some(0xE022), "播放不能是 G 键");
+        assert_eq!(vk_to_scan(0x5D), Some(0xE15D), "菜单键要带扩展标记");
+        assert_eq!(vk_to_scan(0x2C), Some(0xE137), "PrintScreen 是 0x37|ext");
+        assert_eq!(vk_to_scan(0x13), Some(0x45), "Pause 不能返回 None");
+    }
+
+    #[test]
+    fn media_key_names_ignore_system_lookup() {
+        // GetKeyNameTextW 对扩展 0x20 会返回 "D"，必须按扫描码覆盖
+        assert_eq!(key_name(0xE020), "音量静音");
+        assert_eq!(key_name(0xE022), "播放/暂停");
+        assert_eq!(key_name(0xE15D), "菜单键");
+        assert_eq!(key_name(0xE137), "PrintScreen");
+    }
+
+    #[test]
+    fn ordinary_keys_still_work() {
+        assert_eq!(vk_to_scan(0x41), Some(0x1E), "A");
+        assert_eq!(vk_to_scan(0x44), Some(0x20), "D");
+        assert_eq!(vk_to_scan(0x20), Some(0x39), "空格");
+        assert_eq!(vk_to_scan(0x25), Some(0xE14B), "方向键带扩展标记");
     }
 
     #[test]
