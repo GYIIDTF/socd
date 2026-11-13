@@ -228,6 +228,11 @@ impl Settings {
             }
             out.push_str(&format!("program: {}\n", profile.program));
             for m in &profile.mappings {
+                // 草稿只存在于编辑中的界面，不该落盘：它没有真实按键，
+                // 写进文件只会留下 `mapping: OPPOSITE 0 0` 这种脏行。
+                if m.source == 0 || m.destination == 0 {
+                    continue;
+                }
                 out.push_str(&format!(
                     "mapping: {} {} {}\n",
                     m.mode.as_settings_str(),

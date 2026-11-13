@@ -639,9 +639,10 @@ impl App {
                     m.mode = mode;
                 }
 
-                if complete {
-                    self.save()?;
-                }
+                // 草稿不参与 reapply（查找表会忽略它），但要落盘：
+                // 清空已有键位时正是走到这里，不保存的话磁盘上留着旧映射，
+                // 重启后又"复活"了。serialize 会跳过草稿行，所以不会写脏数据。
+                self.save()?;
                 self.reapply();
                 Ok(self.state()?)
             }
