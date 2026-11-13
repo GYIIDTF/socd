@@ -24,7 +24,7 @@ def case_huge_content_length():
     """声明 4GB 请求体但只发几个字节。"""
     s = conn()
     s.sendall(
-        b"POST /api HTTP/1.1\r\nHost: x\r\nContent-Length: 4294967295\r\n\r\n" + b"abc"
+        b"POST /api HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 4294967295\r\n\r\n" + b"abc"
     )
     start = time.time()
     try:
@@ -40,7 +40,7 @@ def case_huge_content_length():
 def case_slow_header():
     """只发请求行，不发空行。"""
     s = conn()
-    s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n")
+    s.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n")
     time.sleep(1)
     try:
         s.sendall(b"X-Slow: 1\r\n")
