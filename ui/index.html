@@ -1672,10 +1672,13 @@ function renderRows() {
       }
     };
 
-    // 右键清空这一侧。比"按一个键再按删除"直接，也不用先进捕获状态。
+    // 右键清空。捕获过程中按右键要先取消捕获，否则框还闪着"按下按键"、
+    // 数据却已经被清掉了，用户不知道现在到底在等什么。
     [srcEl, dstEl].forEach(el => {
       el.oncontextmenu = (e) => {
         e.preventDefault();
+        e.stopPropagation();
+        if (capture) cancelCapture();
         clearSide(i, el.dataset.side);
       };
     });
@@ -1690,21 +1693,23 @@ async function selectProfile(i) {
   try {
     state = await invoke("selectProfile", { index: i });
     render();
-  } catch (e) { notify(e.message, true); }
+  } catch (e) { notify(e.message, true, 6000); }
 }
 
 async function deleteMapping(i) {
+  // 删除会让后面的行整体前移，捕获中的 mappingIndex 就指错了行。
+  if (capture) cancelCapture();
   try {
     state = await invoke("deleteMapping", { index: i });
     render();
-  } catch (e) { notify(e.message, true); }
+  } catch (e) { notify(e.message, true, 6000); }
 }
 
 async function updateMode(i, mode) {
   try {
     state = await invoke("updateMappingMode", { index: i, mode });
     render();
-  } catch (e) { notify(e.message, true); }
+  } catch (e) { notify(e.message, true, 6000); }
 }
 
 // 清空某一侧，映射退回草稿：不落盘、不参与查重，但仍占着一行。
@@ -1728,7 +1733,7 @@ async function clearSide(i, side) {
       mode: next.mode,
     });
     render();
-  } catch (e) { notify(e.message, true); }
+  } catch (e) { notify(e.message, true, 6000); }
 }
 
 async function deleteCurrentProfile() {
@@ -1738,7 +1743,7 @@ async function deleteCurrentProfile() {
     state = await invoke("deleteProfile", { index: state.activeIndex });
     render();
     notify(`已删除 ${name}`);
-  } catch (e) { notify(e.message, true); }
+  } catch (e) { notify(e.message, true, 6000); }
 }
 
 /* =============== 捕获按键 =============== */
@@ -1882,7 +1887,7 @@ async function confirmAdd() {
     state = await invoke("addProfile", { program: name });
     closeDialog();
     render();
-  } catch (e) { notify(e.message, true); }
+  } catch (e) { notify(e.message, true, 6000); }
 }
 
 /* =============== 事件绑定 =============== */
@@ -1901,7 +1906,7 @@ document.getElementById("btn-add-mapping").onclick = async () => {
   try {
     state = await invoke("addMapping", {});
     render();
-  } catch (e) { notify(e.message, true); }
+  } catch (e) { notify(e.message, true, 6000); }
 };
 
 setInterval(async () => {
