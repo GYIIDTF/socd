@@ -1893,7 +1893,6 @@ document.getElementById("btn-add-mapping").onclick = async () => {
   try {
     state = await invoke("addMapping", {});
     render();
-    beginCapture(state.profiles[state.activeIndex].mappings.length - 1, "source");
   } catch (e) { notify(e.message, true); }
 };
 
