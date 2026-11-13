@@ -355,6 +355,17 @@ fn describe(existing: &Mapping) -> String {
     )
 }
 
+/// 扫描码必须落在查找表范围内，否则 install 会静默丢弃这条映射——
+/// 界面上显示正常，实际永不生效。
+const MAX_SCAN: ScanCode = crate::socd::BindTable::SIZE as ScanCode - 1;
+
+fn check_scan_bound(key: ScanCode) -> Result<(), String> {
+    if key > MAX_SCAN {
+        return Err(format!("这个键的编码超出支持范围（0x{key:04X}）"));
+    }
+    Ok(())
+}
+
 /// 目标键能不能用。
 ///
 /// 与源键的区别：目标键可以被重映射重复使用（多个键指向同一目标），
@@ -365,6 +376,7 @@ fn check_destination(
     existing_all: &[Mapping],
     skip_index: Option<usize>,
 ) -> Result<(), String> {
+    check_scan_bound(key)?;
     for (i, existing) in existing_all.iter().enumerate() {
         if Some(i) == skip_index || existing.source == DRAFT_SCAN {
             continue;
@@ -406,6 +418,7 @@ fn check_source(
     existing_all: &[Mapping],
     skip_index: Option<usize>,
 ) -> Result<(), String> {
+    check_scan_bound(key)?;
     for (i, existing) in existing_all.iter().enumerate() {
         if Some(i) == skip_index || existing.source == DRAFT_SCAN {
             continue;
@@ -491,6 +504,12 @@ impl App {
                     .to_string();
                 if program.is_empty() {
                     return Err("请先填写程序名".into());
+                }
+                // 配置文件是一行一个 `program: xxx`。名字里带换行会写出半截行，
+                // 加载时后半截被当成无效行丢掉；更糟的是构造 `\nPROFILE_END\n
+                // PROFILE_START\nprogram: X` 能凭空多出一个配置。
+                if program.contains(['\n', '\r']) {
+                    return Err("程序名不能包含换行".into());
                 }
                 if self
                     .settings
@@ -987,6 +1006,14 @@ mod tests {
             .expect_err("应当拒绝");
         assert!(err.contains("请先删掉"), "缺少操作指引：{err}");
         assert!(err.contains("重映射"), "缺少替代方案：{err}");
+    }
+
+    #[test]
+    fn rejects_scan_code_out_of_range() {
+        // 查找表只有 0xE200 个槽位，超出的会被静默丢弃
+        assert!(check_source(0xF000, MappingMode::Opposite, &[], None).is_err());
+        assert!(check_destination(0xF000, MappingMode::Opposite, &[], None).is_err());
+        assert!(check_source(0xE14B, MappingMode::Opposite, &[], None).is_ok());
     }
 
     #[test]

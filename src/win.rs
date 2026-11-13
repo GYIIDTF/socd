@@ -11,7 +11,7 @@ use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::ProcessStatus::K32EnumProcesses;
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_INFORMATION,
+    OpenProcess, QueryFullProcessImageNameW,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -149,15 +149,9 @@ unsafe extern "system" fn hook_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM)
         Ok(mut m) => {
             let repeat = m.keys.is_down(scan) && is_down;
             let Machine { table, keys } = &mut *m;
-            let out = socd::handle(table, keys, scan, is_down, repeat);
-            // 在同一次加锁里登记注入状态：钩子关闭时要靠它补发 up。
-            for a in &out.actions {
-                match a {
-                    Inject::Down(c) => keys.note_down(*c),
-                    Inject::Up(c) => keys.note_up(*c),
-                }
-            }
-            (out, repeat)
+            // 注入计数由 handle 内部维护（见 KeyState::acquire/release），
+            // 钩子关闭时靠它补发 up。
+            (socd::handle(table, keys, scan, is_down, repeat), repeat)
         }
         Err(TryLockError::WouldBlock) => {
             return unsafe { CallNextHookEx(std::ptr::null_mut(), n_code, wparam, lparam) };
@@ -166,14 +160,7 @@ unsafe extern "system" fn hook_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM)
             let mut m = p.into_inner();
             let repeat = m.keys.is_down(scan) && is_down;
             let Machine { table, keys } = &mut *m;
-            let out = socd::handle(table, keys, scan, is_down, repeat);
-            for a in &out.actions {
-                match a {
-                    Inject::Down(c) => keys.note_down(*c),
-                    Inject::Up(c) => keys.note_up(*c),
-                }
-            }
-            (out, repeat)
+            (socd::handle(table, keys, scan, is_down, repeat), repeat)
         }
     };
 
@@ -457,7 +444,7 @@ mod tests {
 ///
 /// 调用方每 120ms 轮询一次，而 `OpenProcess` + `QueryFullProcessImageNameW`
 /// 是两次系统调用。窗口没变时没必要重查，缓存一次即可省掉绝大部分开销。
-static LAST_FG: Mutex<Option<(usize, Option<String>)>> = Mutex::new(None);
+static LAST_FG: Mutex<Option<(usize, u32, Option<String>)>> = Mutex::new(None);
 
 pub fn foreground_program() -> Option<String> {
     unsafe {
@@ -467,17 +454,19 @@ pub fn foreground_program() -> Option<String> {
         }
 
         let key = hwnd as usize;
-        // 命中缓存就直接返回，连锁都是快速的
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        // 缓存同时记 HWND 和 PID。只比 HWND 是不够的：USER32 会回收窗口
+        // 句柄，旧窗口销毁后新窗口可能拿到同一个值，于是返回上一个进程的
+        // 名字——配置会在错误的程序里激活，或者在正确的程序里不激活。
         if let Ok(cache) = LAST_FG.lock() {
-            if let Some((cached_hwnd, ref name)) = *cache {
-                if cached_hwnd == key {
+            if let Some((cached_hwnd, cached_pid, ref name)) = *cache {
+                if cached_hwnd == key && cached_pid == pid {
                     return name.clone();
                 }
             }
         }
 
-        let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, &mut pid);
         if pid == 0 {
             // Windows reports the idle process for a brief moment while a window
             // minimizes or is destroyed.
@@ -487,7 +476,7 @@ pub fn foreground_program() -> Option<String> {
         let name = process_exe_name(pid);
 
         if let Ok(mut cache) = LAST_FG.lock() {
-            *cache = Some((key, name.clone()));
+            *cache = Some((key, pid, name.clone()));
         }
         name
     }
@@ -495,11 +484,11 @@ pub fn foreground_program() -> Option<String> {
 
 fn process_exe_name(pid: u32) -> Option<String> {
     unsafe {
-        let handle = OpenProcess(
-            PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION,
-            0,
-            pid,
-        );
+        // 只请求 QUERY_LIMITED_INFORMATION。QueryFullProcessImageNameW 需要的
+        // 就是它，而 QUERY_INFORMATION 是更宽的权限——同时申请两者时，系统
+        // 按最严的那个判定，受保护进程（带反作弊的游戏等）会直接拒绝，
+        // 明明只申请 LIMITED 就能读。权限要得越少，能打开的进程越多。
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
             return None;
         }

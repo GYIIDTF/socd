@@ -128,9 +128,14 @@ pub struct KeyState {
     /// 该键当前是否被对向伙伴压制（游戏那边认为它已松开）。
     /// 自动重复事件没有别的办法区分"赢家的重复"和"输家的重复"。
     suppressed: Vec<bool>,
-    /// 我们注入过 down、还没注入 up 的目标键。钩子关闭时必须逐个补 up，
-    /// 否则被映射的键会在系统里保持按下（映射到 Ctrl 就是全局卡住）。
-    injected: Vec<ScanCode>,
+    /// 每个目标键当前被多少个源键"按着"。
+    ///
+    /// 多个重映射可以指向同一个目标键（Q→W、E→W 都合法）。松开其中一个源键
+    /// 时目标键不能立刻松开，否则 W 会在 E 还按着的时候被提前释放。
+    /// 计数归零才发 up。
+    ///
+    /// 同时它也是钩子关闭时的补发清单：非零项就是仍处于按下状态的目标键。
+    held_by: Vec<u32>,
 }
 
 impl Default for KeyState {
@@ -138,7 +143,7 @@ impl Default for KeyState {
         KeyState {
             down: vec![false; BindTable::SIZE],
             suppressed: vec![false; BindTable::SIZE],
-            injected: Vec::new(),
+            held_by: vec![0; BindTable::SIZE],
         }
     }
 }
@@ -166,20 +171,38 @@ impl KeyState {
 
     /// Clears everything — used when hooks are torn down so no stale state leaks
     /// between profiles.
-    /// 记录一次注入，供钩子关闭时补发 up。
-    pub fn note_down(&mut self, code: ScanCode) {
-        if !self.injected.contains(&code) {
-            self.injected.push(code);
+    /// 目标键多了一个源键按住。返回 true 表示需要真正注入 down。
+    pub fn acquire(&mut self, code: ScanCode) -> bool {
+        match self.held_by.get_mut(code as usize) {
+            Some(n) => {
+                *n = n.saturating_add(1);
+                *n == 1
+            }
+            None => false,
         }
     }
 
-    pub fn note_up(&mut self, code: ScanCode) {
-        self.injected.retain(|&c| c != code);
+    /// 目标键少了一个源键。返回 true 表示计数归零、需要真正注入 up。
+    pub fn release(&mut self, code: ScanCode) -> bool {
+        match self.held_by.get_mut(code as usize) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                *n == 0
+            }
+            _ => true,
+        }
     }
 
-    /// 取出仍处于"已注入按下"状态的目标键，并清空记录。
+    /// 取出仍处于"已按下"状态的目标键，并清零。
     pub fn take_pending(&mut self) -> Vec<ScanCode> {
-        std::mem::take(&mut self.injected)
+        let mut out = Vec::new();
+        for (i, n) in self.held_by.iter_mut().enumerate() {
+            if *n > 0 {
+                *n = 0;
+                out.push(i as ScanCode);
+            }
+        }
+        out
     }
 
     pub fn reset(&mut self) {
@@ -213,12 +236,30 @@ pub fn handle(
     match mode {
         MappingMode::Remap => {
             state.set(code, is_down);
+            // 自动重复不是新的一次按下，不能重复计数——否则计数永远归不了零，
+            // 松开时就不会发 up，目标键卡住。
+            if is_repeat {
+                return Outcome::swallow(vec![]);
+            }
+            // 多个源键可以指向同一个目标键。按下时只有第一个真正注入 down，
+            // 松开时只有最后一个才注入 up——否则 Q→W、E→W 同时按住时，
+            // 松开 Q 会把还该按着的 W 提前释放。
             let action = if is_down {
-                Inject::Down(bind.destination)
+                if state.acquire(bind.destination) {
+                    Some(Inject::Down(bind.destination))
+                } else {
+                    None
+                }
+            } else if state.release(bind.destination) {
+                Some(Inject::Up(bind.destination))
             } else {
-                Inject::Up(bind.destination)
+                None
             };
-            Outcome::swallow(vec![action])
+            // 原键一律吞掉，有没有注入是另一回事
+            match action {
+                Some(a) => Outcome::swallow(vec![a]),
+                None => Outcome::swallow(vec![]),
+            }
         }
 
         MappingMode::Opposite | MappingMode::OppositeNoRepress => {
@@ -330,6 +371,44 @@ mod tests {
         let up = handle(&t, &mut st, W, false, false);
         assert_eq!(up.pass, Pass::Swallow);
         assert_eq!(up.actions, vec![Inject::Up(S)]);
+    }
+
+    /// 两个源键指向同一个目标：松开一个不能让目标提前释放。
+    #[test]
+    fn remap_shared_target_holds_until_last_release() {
+        let mut t = BindTable::new();
+        t.install(&[
+            Mapping { source: W, destination: S, mode: MappingMode::Remap },
+            Mapping { source: 0x12, destination: S, mode: MappingMode::Remap }, // E -> S
+        ]);
+        let mut st = KeyState::default();
+
+        let q = handle(&t, &mut st, W, true, false);
+        assert_eq!(q.actions, vec![Inject::Down(S)], "第一个源键要注入 down");
+
+        let e = handle(&t, &mut st, 0x12, true, false);
+        assert!(e.actions.is_empty(), "第二个源键不能再注入一次 down");
+
+        let q_up = handle(&t, &mut st, W, false, false);
+        assert!(q_up.actions.is_empty(), "还有一个源键按着，不能释放目标");
+
+        let e_up = handle(&t, &mut st, 0x12, false, false);
+        assert_eq!(e_up.actions, vec![Inject::Up(S)], "最后一个源键松开才发 up");
+    }
+
+    /// 自动重复不是新按下，不能把计数抬高（否则永远归不了零）。
+    #[test]
+    fn remap_repeat_does_not_double_count() {
+        let mut t = BindTable::new();
+        t.install(&[Mapping { source: W, destination: S, mode: MappingMode::Remap }]);
+        let mut st = KeyState::default();
+
+        handle(&t, &mut st, W, true, false);
+        let r = handle(&t, &mut st, W, true, true);
+        assert!(r.actions.is_empty(), "重复不该再注入");
+
+        let up = handle(&t, &mut st, W, false, false);
+        assert_eq!(up.actions, vec![Inject::Up(S)], "松开时必须还能发出 up");
     }
 
     #[test]

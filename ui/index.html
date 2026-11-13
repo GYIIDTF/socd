@@ -338,6 +338,15 @@
 
   .chip.on .dot { background: var(--md-primary); }
 
+  /* 钩子没装上：反色实心，比"等待目标程序"更醒目，因为它真的坏了 */
+  .chip.fault {
+    background: var(--black);
+    border-color: var(--black);
+    color: var(--white);
+  }
+
+  .chip.fault .dot { background: var(--white); }
+
   .chip span.label { overflow: hidden; text-overflow: ellipsis; }
 
 
@@ -1510,6 +1519,20 @@ function render() {
 function renderStatus() {
   const chip = document.getElementById("status-chip");
   const label = document.getElementById("status-text");
+
+  // 键盘钩子没装上：所有配置都不会生效。这时显示"等待目标程序"是撒谎，
+  // 用户会以为是程序没开，实际上换个目标程序也没用。
+  if (state.hooked === false) {
+    chip.style.display = "";
+    chip.classList.remove("on");
+    chip.classList.add("fault");
+    label.textContent = "键盘钩子未生效";
+    chip.title = "无法安装全局键盘钩子，按键映射不会工作。可能是权限不足或被杀软拦截。";
+    return;
+  }
+  chip.classList.remove("fault");
+  chip.removeAttribute("title");
+
   const armed = state.armedProgram;
 
   // 全局配置对所有程序生效，没有"等待目标程序"这回事

@@ -62,14 +62,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     logging::warn(&format!("界面地址 {url}"));
     single_instance::publish_url(&url);
 
-    build_tray(url.clone())?;
+    // 托盘建不起来（Explorer 没运行、资源被占）不该让整个进程退出：
+    // 映射已经装上了，退出等于把正在工作的功能一起关掉。没有托盘就改为
+    // 把界面打开——用户至少还能看到程序在跑，也能从界面确认状态。
+    let tray_ok = match build_tray(url.clone()) {
+        Ok(()) => true,
+        Err(e) => {
+            logging::warn(&format!("托盘创建失败：{e}"));
+            false
+        }
+    };
 
     // 静默启动：只驻留托盘，不动用户正在用的窗口。
     //
-    // 两个例外：首次运行（桌面上什么都不出现，用户不知道该点托盘）和显式
-    // 传入 --open 时，才把界面打开。之后每次启动都不再弹。
+    // 三个例外：首次运行（桌面上什么都不出现，用户不知道该点托盘）、
+    // 显式传入 --open，以及托盘建不起来（没有别的入口能找到界面）。
     let first_run = app.lock().map(|a| a.first_run).unwrap_or(false);
-    if first_run || std::env::args().any(|a| a == "--open") {
+    if first_run || !tray_ok || std::env::args().any(|a| a == "--open") {
         server::open_browser(&url);
     }
 
@@ -103,7 +112,8 @@ fn parse_port_arg() -> u16 {
         .unwrap_or(0)
 }
 
-fn build_tray(url: String) -> Result<(), Box<dyn std::error::Error>> {    let menu = Menu::new();
+fn build_tray(url: String) -> Result<(), Box<dyn std::error::Error>> {
+    let menu = Menu::new();
     let open = MenuItem::new("打开设置界面", true, None);
     let quit = MenuItem::new("退出", true, None);
     menu.append(&open)?;

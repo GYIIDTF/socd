@@ -64,12 +64,25 @@ fn handle_conn(
     token: &str,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+    // 写超时同样要设：客户端连上后不读响应，write_all 会一直阻塞，
+    // 占着并发槽位不放，攒够 16 个界面就再也连不上了。
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
 
     let mut reader = BufReader::new(stream.try_clone()?);
 
+    // read_line 没有长度上限：本机任意进程发一行永不结束的请求行，
+    // 内存就会一直涨。这里对单行和总行数都设硬上限。
+    const MAX_LINE: u64 = 8 * 1024;
+    const MAX_HEADERS: usize = 64;
+
     // 请求行
     let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
+    if reader.by_ref().take(MAX_LINE).read_line(&mut request_line)? == 0 {
+        return Ok(());
+    }
+    if !request_line.ends_with('\n') {
+        return write_response(&mut stream, 414, "text/plain", b"URI Too Long");
+    }
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     // 请求行里的路径可能带查询串（如 `/?dialog=1`），路由只关心路径本身
@@ -78,9 +91,11 @@ fn handle_conn(
 
     // 头部
     let mut content_length = 0usize;
-    loop {
+    // None = 请求没带 Host 头（HTTP/1.0、裸 socket 测试都是这样）
+    let mut host: Option<String> = None;
+    for _ in 0..MAX_HEADERS {
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        if reader.by_ref().take(MAX_LINE).read_line(&mut line)? == 0 {
             break;
         }
         let line = line.trim_end();
@@ -90,7 +105,22 @@ fn handle_conn(
         if let Some((k, v)) = line.split_once(':') {
             if k.eq_ignore_ascii_case("content-length") {
                 content_length = v.trim().parse().unwrap_or(0);
+            } else if k.eq_ignore_ascii_case("host") {
+                host = Some(v.trim().to_string());
             }
+        }
+    }
+
+    // 浏览器发来的 Host 必然是 127.0.0.1。其他值意味着请求来自别的域名——
+    // 典型场景是 DNS rebinding：恶意页面把自己的域名解析到 127.0.0.1，
+    // 同源之后就能读到页面里的令牌并驱动键盘映射。
+    //
+    // 只在这个头存在且不匹配时拒绝。没带 Host 的是 HTTP/1.0 或裸 socket
+    // 调用（我们的测试脚本就是这样），它们本来就不受同源策略约束，
+    // 挡住它们没有意义，反倒会误伤。
+    if let Some(h) = host {
+        if !h.starts_with("127.0.0.1") && !h.starts_with("localhost") {
+            return write_response(&mut stream, 403, "text/plain", b"Forbidden");
         }
     }
 
@@ -209,6 +239,7 @@ fn write_response(
         403 => "Forbidden",
         404 => "Not Found",
         413 => "Payload Too Large",
+        414 => "URI Too Long",
         _ => "OK",
     };
 
