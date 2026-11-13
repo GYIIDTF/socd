@@ -43,6 +43,8 @@ pub struct StateView {
     pub armed_program: Option<String>,
     pub hooked: bool,
     pub settings_path: String,
+    /// 配置读取失败的用户可见说明，正常时为 null
+    pub load_error: Option<String>,
     pub modes: Vec<ModeOption>,
 }
 
@@ -108,6 +110,9 @@ pub struct App {
     /// 本次启动是否生成了全新配置。首次运行需要提示用户去托盘找界面，
     /// 否则静默启动看起来像什么都没发生。
     pub first_run: bool,
+    /// 配置文件存在但读不出来时的说明。非空表示"当前界面上是空配置，
+    /// 继续操作会覆盖原文件"，必须让用户看见。
+    pub load_error: Option<String>,
 }
 
 impl App {
@@ -116,11 +121,25 @@ impl App {
         // 首次运行没有配置文件是正常状态，不是错误：用默认值启动，并把这份
         // 默认配置写盘，下次启动就有文件了。
         let first_run = !path.exists();
+        let mut load_error = None;
         let settings = match Settings::load(&path) {
             Ok(s) => s,
             Err(e) => {
                 if !first_run {
                     crate::logging::warn(&format!("读取配置失败（{e}），使用默认值"));
+                    // 文件存在但读不出来（截断、版本不符、带 BOM、被占用）。
+                    // 接下来任何一次保存都会用默认内容覆盖它，用户此前的
+                    // 全部映射就没了。先留一份备份，并让界面提示这件事。
+                    let backup = path.with_extension("socd.bak");
+                    let _ = std::fs::copy(&path, &backup);
+                    load_error = Some(format!(
+                        "配置文件读取失败，已备份为 {}。当前显示的是空配置，\
+                         继续操作会覆盖原文件。",
+                        backup
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "settings.socd.bak".into())
+                    ));
                 }
                 Settings::default()
             }
@@ -133,6 +152,7 @@ impl App {
             armed: None,
             guard: None,
             first_run,
+            load_error,
         };
 
         if app.settings.profiles.is_empty() {
@@ -257,6 +277,7 @@ impl App {
             armed_program: self.armed.clone(),
             hooked: self.guard.is_some(),
             settings_path: self.path.display().to_string(),
+            load_error: self.load_error.clone(),
             modes: mode_options(),
         }
     }

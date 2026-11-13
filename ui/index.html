@@ -1916,6 +1916,11 @@ setInterval(async () => {
   try {
     state = await invoke("getState");
     render();
+    // 配置读取失败时界面显示的是空配置，继续操作会覆盖原文件。
+    // 必须让用户先知道，不能等他不小心存了一次才发现映射全没了。
+    if (state.loadError) {
+      notify(state.loadError, true, 20000);
+    }
     // ?dialog=1 直接打开新建弹窗，便于截图与调试
     if (new URLSearchParams(location.search).get("dialog") === "1") openDialog();
   } catch (err) {
