@@ -267,79 +267,147 @@ impl App {
 
     /// 拒绝会造成“看得见但不生效”的映射。
     ///
-    /// 三类问题：
-    ///   * 源键重复：表里按源键索引，后写的会覆盖先写的，界面上却显示两条；
-    ///   * 映射到自己：REMAP 会吞掉按键又注入同一个键，等于把这个键废掉；
-    ///   * 目标键共享：对向类模式靠“目标键的反向映射”找回配对，
-    ///     一个键只能属于一对。两条指向同一个目标键时，后一条的反向映射
-    ///     装不进去，那一对就永远不会互相感知——配置看着成功，实际不工作。
+    /// 分成两个阶段，对应界面上两次按键：
+    ///   * 源键：按第一个框时就能判断这个键能不能用；
+    ///   * 配对：按第二个框时判断这两键能不能成对。
     ///
-    /// REMAP 不受第三条限制：它本就是单向的，多个键指向同一目标完全合理。
-    fn validate_mapping(&self, m: &Mapping, skip_index: Option<usize>) -> Result<(), String> {
+    /// 早一点报错，用户就不用把两个键都按完才发现白做。
+    ///
+    /// REMAP 不占用目标槽位，多个键指向同一目标完全合理。
+    fn validate_source(
+        &self,
+        source: ScanCode,
+        mode: MappingMode,
+        skip_index: Option<usize>,
+    ) -> Result<(), String> {
+        let Some(profile) = self.active_profile() else {
+            return Ok(());
+        };
+        check_source(source, mode, &profile.mappings, skip_index)
+    }
+
+    fn validate_pair(
+        &self,
+        m: &Mapping,
+        skip_index: Option<usize>,
+    ) -> Result<(), String> {
+        let Some(profile) = self.active_profile() else {
+            return Ok(());
+        };
+        validate_against(m, &profile.mappings, skip_index)
+    }
+
+    fn active_profile(&self) -> Option<&Profile> {
         let idx = self
             .settings
             .active_profile_index
             .min(self.settings.profiles.len().saturating_sub(1));
-        let Some(profile) = self.settings.profiles.get(idx) else {
-            return validate_against(m, &[], skip_index);
-        };
-        validate_against(m, &profile.mappings, skip_index)
+        self.settings.profiles.get(idx)
     }
 }
 
-/// 校验主体，脱离 `App` 以便单测。
+/// 把一条映射描述成「A → B」，用于错误提示里指名道姓。
+fn describe(existing: &Mapping) -> String {
+    format!(
+        "{} → {}",
+        win::key_name(existing.source),
+        win::key_name(existing.destination)
+    )
+}
+
+/// 阶段一：这个键能不能当源键（或目标键）用。
+///
+/// 冲突有两种：
+///   * 它已经是某条映射的源键——表按源键索引，会互相覆盖；
+///   * 它已是对向映射的目标键——那个槽位被反向映射占着。
+fn check_source(
+    key: ScanCode,
+    mode: MappingMode,
+    existing_all: &[Mapping],
+    skip_index: Option<usize>,
+) -> Result<(), String> {
+    for (i, existing) in existing_all.iter().enumerate() {
+        if Some(i) == skip_index || existing.source == DRAFT_SCAN {
+            continue;
+        }
+        if existing.source == key {
+            return Err(format!(
+                "{} 已经用在「{}」里了。请先删掉那一条，或换成别的键。",
+                win::key_name(key),
+                describe(existing)
+            ));
+        }
+        // 对向映射的目标键被反向映射占着，不能再当源键
+        if is_pairing_mode(existing.mode) && existing.destination == key {
+            return Err(format!(
+                "{} 已经作为「{}」的目标键配成对了，一个键只能属于一对。
+                 请先删掉那一条，或换成别的键。",
+                win::key_name(key),
+                describe(existing)
+            ));
+        }
+    }
+    let _ = mode;
+    Ok(())
+}
+
+/// 阶段二：两个键能不能配成一对。假设源键已经通过 check_source。
 fn validate_against(
     m: &Mapping,
     existing_all: &[Mapping],
     skip_index: Option<usize>,
 ) -> Result<(), String> {
     if m.source == m.destination {
-        return Err("不能把按键映射到它自己".into());
+        return Err(format!(
+            "{} 不能映射到它自己。请换一个目标键。",
+            win::key_name(m.source)
+        ));
+    }
+
+    // 源键阶段已经查过，这里只补充配对相关的冲突
+    check_source(m.source, m.mode, existing_all, skip_index)?;
+
+    if !is_pairing_mode(m.mode) {
+        return Ok(());
     }
 
     for (i, existing) in existing_all.iter().enumerate() {
-        if Some(i) == skip_index {
+        if Some(i) == skip_index || existing.source == DRAFT_SCAN {
             continue;
         }
-        // 草稿没有真实按键，不参与查重
-        if existing.source == DRAFT_SCAN {
-            continue;
-        }
-        if existing.source == m.source {
+        let e_pairing = is_pairing_mode(existing.mode);
+
+        // 目标键已经是另一条对向映射的目标 → 两者都想占这个槽位
+        if e_pairing && existing.destination == m.destination {
             return Err(format!(
-                "{} 已经有一条映射了，请先删除或改成别的键",
-                win::key_name(m.source)
+                "{} 已经和 {} 配成对了（「{}」），一个键只能属于一对。
+                 请先删掉那一条，或者把这条改用「重映射」。",
+                win::key_name(m.destination),
+                win::key_name(existing.source),
+                describe(existing)
             ));
         }
 
-        // 对向类映射会额外占用目标键的槽位（用来存反向映射）。
-        // 槽位冲突意味着镜像装不进去，那一对永远不会互相感知。
-        //
-        // 占位规则：映射 S→D 占 S；若为对向类，还要占 D。
-        // 于是新映射与已有映射冲突，当且仅当：
-        //   a) 新映射的源 S 撞上已有的对向占位 D'
-        //   b) 两者都是对向类，且目标相同（都想占 D'）
-        //   c) 新映射的对向占位 D 撞上已有映射的源 S'
-        let m_pairing = is_pairing_mode(m.mode);
-        let e_pairing = is_pairing_mode(existing.mode);
-        if m_pairing {
-            let same_target = existing.destination == m.destination;
-            let steals_slot = existing.source == m.destination;
-            let clobbers_mirror = e_pairing && existing.destination == m.source;
+        // 目标键是别的映射的源键 → 它的槽位已被占
+        if existing.source == m.destination {
+            return Err(format!(
+                "{} 已经用在「{}」里了，不能再当目标键。
+                 请先删掉那一条，或换成别的键。",
+                win::key_name(m.destination),
+                describe(existing)
+            ));
+        }
 
-            if same_target && e_pairing {
-                return Err(format!(
-                    "{} 已经和 {} 组成了一对，一个键只能属于一对映射",
-                    win::key_name(m.destination),
-                    win::key_name(existing.source)
-                ));
-            }
-            if steals_slot || clobbers_mirror {
-                return Err(format!(
-                    "{} 已经有一条对向映射了，一个键只能属于一对映射",
-                    win::key_name(if steals_slot { m.destination } else { m.source })
-                ));
-            }
+        // 源键是别的对向映射的目标键 → 它的槽位被反向映射占着
+        if e_pairing && existing.destination == m.source {
+            return Err(format!(
+                "{} 已经和 {} 配成对了（「{}」），不能再和 {} 配对。
+                 请先删掉那一条，或换成别的键。",
+                win::key_name(m.source),
+                win::key_name(existing.source),
+                describe(existing),
+                win::key_name(m.destination)
+            ));
         }
     }
     Ok(())
@@ -496,13 +564,17 @@ impl App {
                     .and_then(Value::as_str)
                     .and_then(MappingMode::from_settings_str)
                     .ok_or("bad mode")?;
-                // 只设了一侧时仍是草稿：不查重、不落盘、不进查找表。
-                // 两侧都齐了才算一条可用的映射。
+                // 只设了一侧时仍是草稿：不落盘、不进查找表。
+                // 但**校验照做**——按第一个框时就该知道自己是不是白按。
                 let complete = source != DRAFT_SCAN && destination != DRAFT_SCAN;
 
+                if source != DRAFT_SCAN {
+                    // 阶段一：这个键能不能当源键
+                    self.validate_source(source, mode, Some(index))?;
+                }
                 if complete {
-                    // 改键同样要查重，否则两条映射会指向同一个源键
-                    self.validate_mapping(
+                    // 阶段二：两个键能不能配成对
+                    self.validate_pair(
                         &Mapping { source, destination, mode },
                         Some(index),
                     )?;
@@ -779,5 +851,62 @@ mod tests {
     fn draft_is_ignored() {
         let existing = [m(DRAFT_SCAN, 4, MappingMode::Opposite)];
         assert!(validate_against(&m(2, 4, MappingMode::Opposite), &existing, None).is_ok());
+    }
+
+    /* ---- 阶段一：源键按下时就该拦 ---- */
+
+    #[test]
+    fn source_stage_rejects_used_source() {
+        // 3 已经是源键，第一次按框就该拒绝，不必等第二个框
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        let err = check_source(3, MappingMode::Opposite, &existing, None)
+            .expect_err("重复源键应在第一阶段就拦住");
+        assert!(err.contains("已经用在"), "提示不够清楚：{err}");
+    }
+
+    #[test]
+    fn source_stage_rejects_pair_target() {
+        // 4 是 3->4 的目标键，被反向映射占着，不能当源键
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        let err = check_source(4, MappingMode::Opposite, &existing, None)
+            .expect_err("目标键被反向映射占用时应当拦住");
+        assert!(err.contains("配成对了"), "提示不够清楚：{err}");
+    }
+
+    #[test]
+    fn source_stage_allows_free_key() {
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        assert!(check_source(9, MappingMode::Opposite, &existing, None).is_ok());
+    }
+
+    #[test]
+    fn source_stage_ignores_self_when_editing() {
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        assert!(check_source(3, MappingMode::Opposite, &existing, Some(0)).is_ok());
+    }
+
+    #[test]
+    fn remap_target_can_be_used_as_source() {
+        // 重映射不占目标槽位，所以 4 作为重映射的目标后，仍可当源键
+        let existing = [m(3, 4, MappingMode::Remap)];
+        assert!(check_source(4, MappingMode::Opposite, &existing, None).is_ok());
+    }
+
+    /* ---- 错误提示要给出解法 ---- */
+
+    #[test]
+    fn conflict_message_names_the_blocking_mapping() {
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        let err = validate_against(&m(2, 4, MappingMode::Opposite), &existing, None)
+            .expect_err("应当拒绝");
+        assert!(err.contains("请先删掉"), "缺少操作指引：{err}");
+        assert!(err.contains("重映射"), "缺少替代方案：{err}");
+    }
+
+    #[test]
+    fn self_mapping_message_offers_action() {
+        let err = validate_against(&m(5, 5, MappingMode::Opposite), &[], None)
+            .expect_err("应当拒绝");
+        assert!(err.contains("换一个目标键"), "缺少操作指引：{err}");
     }
 }

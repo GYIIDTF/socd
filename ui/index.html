@@ -796,6 +796,22 @@
 
   @keyframes blink { 50% { opacity: .4; } }
 
+  /* 按键被占用时的拒绝反馈：框抖一下，让用户知道是哪一栏没通过。
+     黑白灰配色里没有红色可用，靠抖动与反色表达。 */
+  .cap.conflict {
+    background: var(--black);
+    animation: reject .38s ease;
+  }
+
+  .cap.conflict > span { color: var(--white); }
+
+  @keyframes reject {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-5px); }
+    45% { transform: translateX(5px); }
+    70% { transform: translateX(-3px); }
+  }
+
 
 
   /* 箭头：两种模式同尺寸同色，只靠形状区分 */
@@ -1273,13 +1289,27 @@
 
     z-index: 60;
 
-    max-width: calc(100vw - 40px);
+    /* 错误信息带换行与操作指引，必须允许折行 */
+    white-space: pre-line;
+
+    line-height: 1.55;
+
+    text-align: left;
+
+    max-width: min(560px, calc(100vw - 40px));
 
   }
 
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-  .toast.error { background: #8a1f1f; }
+  /* 主调是黑白灰，没有红色可用。用描边区分错误，比换色更克制。 */
+  .toast.error {
+
+    background: var(--black);
+
+    box-shadow: 0 0 0 1.5px var(--white) inset;
+
+  }
 
 
 
@@ -1437,13 +1467,14 @@ let state = null;
 let capture = null;
 let toastTimer = null;
 
-function notify(message, isError) {
+function notify(message, isError, duration) {
   const el = document.getElementById("toast");
   el.textContent = message;
   el.classList.toggle("error", !!isError);
   el.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+  // 错误信息往往带操作指引，多留一会儿；成功提示一闪而过即可
+  toastTimer = setTimeout(() => el.classList.remove("show"), duration || 2600);
 }
 
 function esc(s) {
@@ -1707,12 +1738,28 @@ function beginCapture(mappingIndex, side) {
         });
       })
       .then((s) => { state = s; render(); })
-      .catch(() => {
+      .catch((err) => {
         capture = null;
         renderRows();
-        notify("这个按键无法映射", true);
+        // 后端会说明是哪条映射挡住的、以及该怎么改。原样转达，
+        // 不要用泛泛的“无法映射”盖掉——那正是用户查不出问题的原因。
+        const msg = (err && err.message) || "这个按键无法映射";
+        notify(msg, true, 6000);
+        flashConflict(side, mappingIndex);
       });
   };
+
+  // 冲突键位框抖一下，让用户知道是哪一栏被拒了。
+  // 用 data 属性定位而不是 nth-child：行可能被重新渲染，序号会错位。
+  function flashConflict(side, index) {
+    const rows = document.querySelectorAll("#rows .row");
+    const row = rows[index];
+    if (!row) return;
+    const el = row.querySelector(`[data-side="${side}"]`);
+    if (!el) return;
+    el.classList.add("conflict");
+    setTimeout(() => el.classList.remove("conflict"), 1200);
+  }
 
   // 点击键位以外的任何地方都取消捕获。用 mousedown 而不是 click：
   // click 在鼠标抬起时才触发，期间按键可能已被捕获。
