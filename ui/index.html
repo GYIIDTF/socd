@@ -1597,7 +1597,7 @@ function renderRows() {
         </svg>
       </div>
       <div class="empty-title">还没有任何映射</div>
-      <div class="empty-hint">点右上角「添加映射」，再按下一个键来指定。</div>
+      <div class="empty-hint">点右上角「添加映射」，再按下一个键来指定。<br>键位框右键可以清空。</div>
     `;
     host.appendChild(empty);
     return;
@@ -1653,6 +1653,8 @@ function renderRows() {
 
     const srcEl = row.querySelector('[data-side="source"]');
     const dstEl = row.querySelector('[data-side="destination"]');
+    srcEl.title = "点击后按下按键；右键清空";
+    dstEl.title = "点击后按下按键；右键清空";
     srcEl.onclick = () => beginCapture(i, "source");
     dstEl.onclick = () => beginCapture(i, "destination");
     srcEl.onkeydown = dstEl.onkeydown = (e) => {
@@ -1661,6 +1663,15 @@ function renderRows() {
         beginCapture(i, e.currentTarget.dataset.side);
       }
     };
+
+    // 右键清空这一侧。比"按一个键再按删除"直接，也不用先进捕获状态。
+    [srcEl, dstEl].forEach(el => {
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        clearSide(i, el.dataset.side);
+      };
+    });
+
     host.appendChild(row);
   });
 }
@@ -1684,6 +1695,30 @@ async function deleteMapping(i) {
 async function updateMode(i, mode) {
   try {
     state = await invoke("updateMappingMode", { index: i, mode });
+    render();
+  } catch (e) { notify(e.message, true); }
+}
+
+// 清空某一侧，映射退回草稿：不落盘、不参与查重，但仍占着一行。
+async function clearSide(i, side) {
+  const profile = state && state.profiles[state.activeIndex];
+  const m = profile && profile.mappings[i];
+  if (!m) return;
+  if (side === "source" && !m.sourceName) return;   // 本来就空
+  if (side === "destination" && !m.destinationName) return;
+
+  const next = { source: m.source, destination: m.destination, mode: m.mode };
+  next[side] = 0;
+
+  try {
+    // 源键被清空时，目标键也得一起清：只有目标没有源不是合法状态
+    if (side === "source") next.destination = 0;
+    state = await invoke("updateMappingBinding", {
+      index: i,
+      source: next.source,
+      destination: next.destination,
+      mode: next.mode,
+    });
     render();
   } catch (e) { notify(e.message, true); }
 }

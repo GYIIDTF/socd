@@ -600,6 +600,10 @@ impl App {
                     .ok_or("bad mode")?;
                 // 只设了一侧时仍是草稿：不落盘、不进查找表。
                 // 但**校验照做**——按第一个框时就该知道自己是不是白按。
+                //
+                // 源键为空时目标键没有意义（无主的映射既不能用也说不清），
+                // 一并清掉，避免留下"只有目标"的半截状态。
+                let destination = if source == DRAFT_SCAN { DRAFT_SCAN } else { destination };
                 let complete = source != DRAFT_SCAN && destination != DRAFT_SCAN;
 
                 if source != DRAFT_SCAN {
