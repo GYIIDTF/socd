@@ -484,7 +484,7 @@ impl App {
             "deleteProfile" => {
                 let index = payload.get("index").and_then(Value::as_u64).ok_or("missing index")? as usize;
                 if index >= self.settings.profiles.len() {
-                    return Err("编号超出范围".into());
+                    return Err("这个配置文件不存在，可能已经被删除了".into());
                 }
                 // 全局配置是所有未匹配程序时的兜底，删掉会让映射在某些情况下
                 // 完全失效。它只能被改名，不能被删除。这条优先于数量检查，
@@ -512,7 +512,7 @@ impl App {
             "selectProfile" => {
                 let index = payload.get("index").and_then(Value::as_u64).ok_or("missing index")? as usize;
                 if index >= self.settings.profiles.len() {
-                    return Err("编号超出范围".into());
+                    return Err("这个配置文件不存在，可能已经被删除了".into());
                 }
                 self.settings.active_profile_index = index;
                 self.save()?;
@@ -563,7 +563,7 @@ impl App {
                 let index = payload.get("index").and_then(Value::as_u64).ok_or("missing index")? as usize;
                 let profile = self.active_profile_mut()?;
                 if index >= profile.mappings.len() {
-                    return Err("编号超出范围".into());
+                    return Err("这条映射不存在，可能已经被删除了".into());
                 }
                 profile.mappings.remove(index);
                 self.save()?;
