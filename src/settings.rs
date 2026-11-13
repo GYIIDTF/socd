@@ -246,29 +246,54 @@ impl Settings {
         Settings::parse(&text)
     }
 
-    /// 原子写入：先写同目录的临时文件，再改名覆盖。
+    /// 原子写入：先写同目录的临时文件，再原子替换。
     ///
     /// 直接 `fs::write` 会在写到一半崩溃时留下截断的配置，下次启动解析失败，
-    /// 用户的全部映射就丢了。改名在同一文件系统内是原子操作。
+    /// 用户的全部映射就丢了。
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let text = self.serialize();
 
         let tmp = path.with_extension("socd.tmp");
         fs::write(&tmp, &text).map_err(|e| format!("写入 {tmp:?} 失败：{e}"))?;
 
-        // Windows 上 rename 不能覆盖已存在的目标，先删再改名。
-        // 中间窗口极短，且此时临时文件已完整，最坏情况是配置回到上一次状态。
-        if path.exists() {
-            let _ = fs::remove_file(path);
-        }
-        fs::rename(&tmp, path).map_err(|e| format!("替换 {path:?} 失败：{e}"))
+        replace_file(&tmp, path).map_err(|e| format!("替换 {path:?} 失败：{e}"))
     }
 }
 
-/// Settings live next to the executable, like the original.
+/// 用 `src` 原子替换 `dst`。
+///
+/// Windows 上 `fs::rename` 不能覆盖已存在的目标，常见写法是"先删再改名"，
+/// 但那两步之间崩溃或断电就会把配置弄丢——用户看到的是映射全没了。
+/// `MoveFileExW` 带 `MOVEFILE_REPLACE_EXISTING` 一步完成替换，没有这个窗口。
+#[cfg(windows)]
+fn replace_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+
+    let wide = |p: &Path| -> Vec<u16> {
+        p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+    };
+
+    let ok = unsafe { MoveFileExW(wide(src).as_ptr(), wide(dst).as_ptr(), MOVEFILE_REPLACE_EXISTING) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::rename(src, dst)
+}
+
 /// 配置文件位置：数据目录下的 `settings.socd`。
 ///
-/// 数据目录默认在 exe 旁边的 `SOCD` 文件夹（见 `paths` 模块），不可写时
+/// 数据目录默认在 exe 旁边的 `Data` 文件夹（见 `paths` 模块），不可写时
 /// 退回用户目录。首次调用会把旧版本的配置搬过来。
 pub fn settings_path() -> PathBuf {
     if let Some(dir) = crate::paths::data_dir() {

@@ -172,15 +172,10 @@ impl App {
         }
         self.hook.generation.fetch_add(1, Ordering::Relaxed);
 
-        // An empty program name means "apply everywhere", matching the
-        // original's fallback to the first profile.
-        let armed = !profile.program.is_empty();
-        self.armed = if armed {
-            Some(profile.program.clone())
-        } else {
-            None
-        };
-        self.hook.enabled.store(armed, Ordering::Relaxed);
+        // 立刻按当前前台判断是否生效，而不是先假定"启用"等下一次轮询纠正。
+        // 否则选中某个程序的配置时，界面会短暂显示"对 X 生效中"——
+        // 即便 X 根本不在前台。
+        self.poll_focus();
     }
 
     /// Called on a timer: enables the hook only while the armed program is focused.
@@ -205,13 +200,18 @@ impl App {
         if was != should_enable {
             // 跨越启停边界时不保留按键状态，否则会漏发 up 事件
             self.hook.machine.lock().unwrap().keys.reset();
-            // 让界面能立刻看到状态变化
-            self.armed = if should_enable {
-                Some(program.clone())
-            } else {
-                None
-            };
         }
+        // armed 表示"当前实际生效的程序名"，无论启停是否变化都要同步：
+        // 切换配置时 was == should_enable（都未启用），但 armed 必须跟着
+        // 新配置清空，否则界面会显示上一个配置的名字。
+        //
+        // 全局配置没有程序名，armed 保持 None——界面上"对所有程序生效"
+        // 是靠配置本身表达的，不需要再报一个名字。
+        self.armed = if should_enable && !program.is_empty() {
+            Some(program.clone())
+        } else {
+            None
+        };
     }
 
     pub fn drain_events(&self) -> Vec<Value> {
@@ -496,6 +496,11 @@ impl App {
                     return Err("至少要保留一个配置文件".into());
                 }
                 self.settings.profiles.remove(index);
+                // 删掉的项在当前选中之前时，后面所有项都往前挪了一位，
+                // 选中索引必须跟着减一，否则会莫名其妙跳到下一个配置。
+                if index < self.settings.active_profile_index {
+                    self.settings.active_profile_index -= 1;
+                }
                 if self.settings.active_profile_index >= self.settings.profiles.len() {
                     self.settings.active_profile_index = self.settings.profiles.len() - 1;
                 }

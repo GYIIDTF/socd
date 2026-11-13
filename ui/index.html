@@ -464,9 +464,17 @@
 
   }
 
-  .tab.live .led { background: #4ade80; }
+  /* "正对上目标程序"的指示。整个界面是黑白灰，这里不用绿色。
+     未选中项是实心黑点；选中项是黑底，改用白色实心点。 */
+  .tab.live .led {
+    background: var(--ink);
+    box-shadow: 0 0 0 2px rgba(26, 26, 26, .18);
+  }
 
-  .tab.active.live .led { background: #86efac; }
+  .tab.active.live .led {
+    background: var(--white);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, .3);
+  }
 
   .tab-name {
 
