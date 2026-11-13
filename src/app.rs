@@ -68,6 +68,15 @@ fn mode_options() -> Vec<ModeOption> {
 /// 草稿映射的标记值：源键为 0（Windows 没有对应的物理键）。
 pub const DRAFT_SCAN: ScanCode = 0;
 
+/// 这类模式会在目标键上补一条反向映射，因此占用目标键的槽位。
+/// REMAP 是单向的，不占。
+fn is_pairing_mode(mode: MappingMode) -> bool {
+    matches!(
+        mode,
+        MappingMode::Opposite | MappingMode::OppositeNoRepress | MappingMode::Neutral
+    )
+}
+
 fn mapping_view(m: &Mapping) -> MappingView {
     // 两侧都设好才算一条可用的映射；只填了一侧时仍按草稿呈现
     let has_source = m.source != DRAFT_SCAN;
@@ -258,40 +267,85 @@ impl App {
 
     /// 拒绝会造成“看得见但不生效”的映射。
     ///
-    /// 两类问题：
+    /// 三类问题：
     ///   * 源键重复：表里按源键索引，后写的会覆盖先写的，界面上却显示两条；
-    ///   * 映射到自己：REMAP 会吞掉按键又注入同一个键，等于把这个键废掉。
+    ///   * 映射到自己：REMAP 会吞掉按键又注入同一个键，等于把这个键废掉；
+    ///   * 目标键共享：对向类模式靠“目标键的反向映射”找回配对，
+    ///     一个键只能属于一对。两条指向同一个目标键时，后一条的反向映射
+    ///     装不进去，那一对就永远不会互相感知——配置看着成功，实际不工作。
+    ///
+    /// REMAP 不受第三条限制：它本就是单向的，多个键指向同一目标完全合理。
     fn validate_mapping(&self, m: &Mapping, skip_index: Option<usize>) -> Result<(), String> {
-        if m.source == m.destination {
-            return Err("不能把按键映射到它自己".into());
-        }
-
         let idx = self
             .settings
             .active_profile_index
             .min(self.settings.profiles.len().saturating_sub(1));
         let Some(profile) = self.settings.profiles.get(idx) else {
-            return Ok(());
+            return validate_against(m, &[], skip_index);
         };
+        validate_against(m, &profile.mappings, skip_index)
+    }
+}
 
-        for (i, existing) in profile.mappings.iter().enumerate() {
-            if Some(i) == skip_index {
-                continue;
-            }
-            // 草稿没有真实按键，不参与查重
-            if existing.source == DRAFT_SCAN {
-                continue;
-            }
-            if existing.source == m.source {
+/// 校验主体，脱离 `App` 以便单测。
+fn validate_against(
+    m: &Mapping,
+    existing_all: &[Mapping],
+    skip_index: Option<usize>,
+) -> Result<(), String> {
+    if m.source == m.destination {
+        return Err("不能把按键映射到它自己".into());
+    }
+
+    for (i, existing) in existing_all.iter().enumerate() {
+        if Some(i) == skip_index {
+            continue;
+        }
+        // 草稿没有真实按键，不参与查重
+        if existing.source == DRAFT_SCAN {
+            continue;
+        }
+        if existing.source == m.source {
+            return Err(format!(
+                "{} 已经有一条映射了，请先删除或改成别的键",
+                win::key_name(m.source)
+            ));
+        }
+
+        // 对向类映射会额外占用目标键的槽位（用来存反向映射）。
+        // 槽位冲突意味着镜像装不进去，那一对永远不会互相感知。
+        //
+        // 占位规则：映射 S→D 占 S；若为对向类，还要占 D。
+        // 于是新映射与已有映射冲突，当且仅当：
+        //   a) 新映射的源 S 撞上已有的对向占位 D'
+        //   b) 两者都是对向类，且目标相同（都想占 D'）
+        //   c) 新映射的对向占位 D 撞上已有映射的源 S'
+        let m_pairing = is_pairing_mode(m.mode);
+        let e_pairing = is_pairing_mode(existing.mode);
+        if m_pairing {
+            let same_target = existing.destination == m.destination;
+            let steals_slot = existing.source == m.destination;
+            let clobbers_mirror = e_pairing && existing.destination == m.source;
+
+            if same_target && e_pairing {
                 return Err(format!(
-                    "{} 已经有一条映射了，请先删除或改成别的键",
-                    win::key_name(m.source)
+                    "{} 已经和 {} 组成了一对，一个键只能属于一对映射",
+                    win::key_name(m.destination),
+                    win::key_name(existing.source)
+                ));
+            }
+            if steals_slot || clobbers_mirror {
+                return Err(format!(
+                    "{} 已经有一条对向映射了，一个键只能属于一对映射",
+                    win::key_name(if steals_slot { m.destination } else { m.source })
                 ));
             }
         }
-        Ok(())
     }
+    Ok(())
+}
 
+impl App {
     /* ---------- command dispatch ---------- */
 
     pub fn handle(&mut self, command: &str, payload: Value) -> Result<Value, String> {
@@ -643,5 +697,87 @@ mod tests {
         for m in MappingMode::all() {
             assert_eq!(MappingMode::from_settings_str(m.as_settings_str()), Some(m));
         }
+    }
+
+    fn m(source: ScanCode, destination: ScanCode, mode: MappingMode) -> Mapping {
+        Mapping { source, destination, mode }
+    }
+
+    #[test]
+    fn allows_normal_pairs() {
+        // A->D 与 W->S 是两组独立的方向对
+        let existing = [m(0x1E, 0x20, MappingMode::Opposite)];
+        assert!(validate_against(&m(0x11, 0x1F, MappingMode::Opposite), &existing, None).is_ok());
+    }
+
+    #[test]
+    fn rejects_shared_destination() {
+        // 用户实际遇到的情况：3->4 已存在，再加 2->4
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        let err = validate_against(&m(2, 4, MappingMode::Opposite), &existing, None)
+            .expect_err("目标键被占用时必须拒绝");
+        assert!(err.contains("只能属于一对"), "提示不够清楚：{err}");
+    }
+
+    #[test]
+    fn rejects_shared_destination_in_neutral() {
+        // 相互抵消同样会补反向映射，限制一样
+        let existing = [m(3, 4, MappingMode::Neutral)];
+        assert!(validate_against(&m(2, 4, MappingMode::Neutral), &existing, None).is_err());
+    }
+
+    #[test]
+    fn rejects_target_used_as_other_source() {
+        // 已有 4->3，再配 2->4：4 已被占为源键
+        let existing = [m(4, 3, MappingMode::Opposite)];
+        assert!(validate_against(&m(2, 4, MappingMode::Opposite), &existing, None).is_err());
+    }
+
+    #[test]
+    fn rejects_source_that_is_other_mirror() {
+        // 已有 3->4（会自动占住 4），再配 4->1：源键 4 已被镜像占住
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        assert!(validate_against(&m(4, 1, MappingMode::Opposite), &existing, None).is_err());
+    }
+
+    #[test]
+    fn remap_may_share_destination() {
+        // 重映射是单向的，多个键指向同一目标完全合理
+        let existing = [m(3, 4, MappingMode::Remap)];
+        assert!(validate_against(&m(2, 4, MappingMode::Remap), &existing, None).is_ok());
+    }
+
+    #[test]
+    fn remap_into_pair_target_is_allowed() {
+        // 对向映射 3->4 存在时，再加一条 2->4 的重映射是允许的：
+        // 重映射不占目标键槽位，不会破坏 3 和 4 的配对
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        assert!(validate_against(&m(2, 4, MappingMode::Remap), &existing, None).is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_source() {
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        assert!(validate_against(&m(3, 9, MappingMode::Opposite), &existing, None).is_err());
+    }
+
+    #[test]
+    fn rejects_self_mapping() {
+        assert!(validate_against(&m(5, 5, MappingMode::Opposite), &[], None).is_err());
+    }
+
+    #[test]
+    fn skip_index_ignores_itself() {
+        // 编辑已有映射时，不该和自己冲突
+        let existing = [m(3, 4, MappingMode::Opposite)];
+        assert!(
+            validate_against(&m(3, 4, MappingMode::Opposite), &existing, Some(0)).is_ok()
+        );
+    }
+
+    #[test]
+    fn draft_is_ignored() {
+        let existing = [m(DRAFT_SCAN, 4, MappingMode::Opposite)];
+        assert!(validate_against(&m(2, 4, MappingMode::Opposite), &existing, None).is_ok());
     }
 }
