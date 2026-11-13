@@ -198,7 +198,12 @@ impl App {
 
         let was = self.hook.enabled.swap(should_enable, Ordering::Relaxed);
         if was != should_enable {
-            // 跨越启停边界时不保留按键状态，否则会漏发 up 事件
+            // 跨越启停边界：先把还按着的目标键补发 up，再清空状态。
+            //
+            // 只 reset 是不够的——被注入按下的 Ctrl/方向键不会因为钩子关闭
+            // 而自动松开，物理键的 keyup 也不再经过我们，于是那个键会一直
+            // 卡在按下状态，直到用户重新按一次。
+            win::release_injected(&self.hook);
             self.hook.machine.lock().unwrap().keys.reset();
         }
         // armed 表示"当前实际生效的程序名"，无论启停是否变化都要同步：

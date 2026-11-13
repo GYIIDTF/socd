@@ -149,7 +149,15 @@ unsafe extern "system" fn hook_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM)
         Ok(mut m) => {
             let repeat = m.keys.is_down(scan) && is_down;
             let Machine { table, keys } = &mut *m;
-            (socd::handle(table, keys, scan, is_down, repeat), repeat)
+            let out = socd::handle(table, keys, scan, is_down, repeat);
+            // 在同一次加锁里登记注入状态：钩子关闭时要靠它补发 up。
+            for a in &out.actions {
+                match a {
+                    Inject::Down(c) => keys.note_down(*c),
+                    Inject::Up(c) => keys.note_up(*c),
+                }
+            }
+            (out, repeat)
         }
         Err(TryLockError::WouldBlock) => {
             return unsafe { CallNextHookEx(std::ptr::null_mut(), n_code, wparam, lparam) };
@@ -158,7 +166,14 @@ unsafe extern "system" fn hook_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM)
             let mut m = p.into_inner();
             let repeat = m.keys.is_down(scan) && is_down;
             let Machine { table, keys } = &mut *m;
-            (socd::handle(table, keys, scan, is_down, repeat), repeat)
+            let out = socd::handle(table, keys, scan, is_down, repeat);
+            for a in &out.actions {
+                match a {
+                    Inject::Down(c) => keys.note_down(*c),
+                    Inject::Up(c) => keys.note_up(*c),
+                }
+            }
+            (out, repeat)
         }
     };
 
@@ -190,6 +205,17 @@ unsafe extern "system" fn hook_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM)
         1
     } else {
         unsafe { CallNextHookEx(std::ptr::null_mut(), n_code, wparam, lparam) }
+    }
+}
+
+/// 补发所有"已注入按下、尚未松开"的目标键。
+///
+/// 钩子即将被禁用时必须调用：禁用后物理键的 keyup 不再经过我们，
+/// 被注入的键就没有机会收到 up，会在系统里一直保持按下。
+pub fn release_injected(state: &HookState) {
+    let mut m = state.machine.lock().unwrap();
+    for code in m.keys.take_pending() {
+        inject_scancode(code, true);
     }
 }
 

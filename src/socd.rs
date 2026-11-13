@@ -125,12 +125,20 @@ impl BindTable {
 #[derive(Debug, Clone)]
 pub struct KeyState {
     down: Vec<bool>,
+    /// 该键当前是否被对向伙伴压制（游戏那边认为它已松开）。
+    /// 自动重复事件没有别的办法区分"赢家的重复"和"输家的重复"。
+    suppressed: Vec<bool>,
+    /// 我们注入过 down、还没注入 up 的目标键。钩子关闭时必须逐个补 up，
+    /// 否则被映射的键会在系统里保持按下（映射到 Ctrl 就是全局卡住）。
+    injected: Vec<ScanCode>,
 }
 
 impl Default for KeyState {
     fn default() -> Self {
         KeyState {
             down: vec![false; BindTable::SIZE],
+            suppressed: vec![false; BindTable::SIZE],
+            injected: Vec::new(),
         }
     }
 }
@@ -146,10 +154,38 @@ impl KeyState {
         }
     }
 
+    pub fn suppressed(&self, code: ScanCode) -> bool {
+        self.suppressed.get(code as usize).copied().unwrap_or(false)
+    }
+
+    pub fn set_suppressed(&mut self, code: ScanCode, v: bool) {
+        if let Some(slot) = self.suppressed.get_mut(code as usize) {
+            *slot = v;
+        }
+    }
+
     /// Clears everything — used when hooks are torn down so no stale state leaks
     /// between profiles.
+    /// 记录一次注入，供钩子关闭时补发 up。
+    pub fn note_down(&mut self, code: ScanCode) {
+        if !self.injected.contains(&code) {
+            self.injected.push(code);
+        }
+    }
+
+    pub fn note_up(&mut self, code: ScanCode) {
+        self.injected.retain(|&c| c != code);
+    }
+
+    /// 取出仍处于"已注入按下"状态的目标键，并清空记录。
+    pub fn take_pending(&mut self) -> Vec<ScanCode> {
+        std::mem::take(&mut self.injected)
+    }
+
     pub fn reset(&mut self) {
         self.down.iter_mut().for_each(|d| *d = false);
+        self.suppressed.iter_mut().for_each(|d| *d = false);
+        // injected 不清空：调用方要用它补发 up
     }
 }
 
@@ -188,20 +224,35 @@ pub fn handle(
         MappingMode::Opposite | MappingMode::OppositeNoRepress => {
             if is_down {
                 let opposite_down = state.is_down(bind.destination);
+                // 重复事件里的"是否被压制"不能用对面是否按下来判断——
+                // 赢家自己也会重复，而它的对面同样按着。真正该问的是：
+                // 上一次这台机器把哪个键判定为生效方向。
+                let suppressed = state.suppressed(code);
                 state.set(code, true);
-                if opposite_down && !is_repeat {
+                if is_repeat {
+                    if suppressed {
+                        Outcome::swallow(vec![])
+                    } else {
+                        Outcome::through()
+                    }
+                } else if opposite_down {
                     // Last one pressed wins: release the opposite, then let this
                     // key through so the game sees the new direction.
+                    state.set_suppressed(bind.destination, true);
+                    state.set_suppressed(code, false);
                     Outcome::through_with(vec![Inject::Up(bind.destination)])
                 } else {
+                    state.set_suppressed(code, false);
                     Outcome::through()
                 }
             } else {
                 let opposite_down = state.is_down(bind.destination);
                 state.set(code, false);
+                state.set_suppressed(code, false);
                 if opposite_down && mode != MappingMode::OppositeNoRepress {
                     // The winner was released while the opposite is still held:
                     // re-press it so the character keeps moving.
+                    state.set_suppressed(bind.destination, false);
                     Outcome::through_with(vec![Inject::Down(bind.destination)])
                 } else {
                     Outcome::through()
@@ -326,6 +377,38 @@ mod tests {
         // A held, D auto-repeats: must not emit another Up(A).
         let repeat = handle(&t, &mut st, D, true, true);
         assert!(repeat.actions.is_empty());
+        // D 是赢家，重复应当照常放行给游戏
+        assert_eq!(repeat.pass, Pass::Through);
+    }
+
+    /// 被压制的键自动重复时必须吞掉。
+    ///
+    /// 游戏那边它已经被注入过 Up（对手抢占时），如果这时再放行一个
+    /// keydown，游戏就会认为两边同时按下——正是 SOCD 要消除的状态。
+    #[test]
+    fn opposite_suppressed_key_repeat_is_swallowed() {
+        let t = table_with(MappingMode::Opposite, A, D);
+        let mut st = KeyState::default();
+
+        handle(&t, &mut st, A, true, false); // A 按下
+        handle(&t, &mut st, D, true, false); // D 按下，A 被注入 Up
+
+        // A 仍按住并自动重复
+        let repeat = handle(&t, &mut st, A, true, true);
+        assert!(repeat.actions.is_empty());
+        assert_eq!(repeat.pass, Pass::Swallow, "被压制键的重复不能放行");
+    }
+
+    #[test]
+    fn opposite_no_repress_suppressed_repeat_is_swallowed() {
+        let t = table_with(MappingMode::OppositeNoRepress, A, D);
+        let mut st = KeyState::default();
+
+        handle(&t, &mut st, A, true, false);
+        handle(&t, &mut st, D, true, false);
+
+        let repeat = handle(&t, &mut st, A, true, true);
+        assert_eq!(repeat.pass, Pass::Swallow);
     }
 
     #[test]
