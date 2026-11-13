@@ -556,8 +556,20 @@ impl App {
                     .and_then(Value::as_str)
                     .and_then(MappingMode::from_settings_str)
                     .ok_or("bad mode")?;
+                // 换模式同样会改变占用关系：重映射不占目标槽，对向类要占。
+                // 不校验的话，把 B→D（重映射）改成对向就会和 A→D 抢 D，
+                // 后装的那对镜像装不进去，界面上两条都显示正常却有一条不工作。
+                let candidate = {
+                    let profile = self.active_profile_mut()?;
+                    let m = profile.mappings.get(index).ok_or("这条映射不存在，可能已经被删除了")?;
+                    Mapping { source: m.source, destination: m.destination, mode }
+                };
+                let is_draft = candidate.source == DRAFT_SCAN || candidate.destination == DRAFT_SCAN;
+                if !is_draft {
+                    self.validate_pair(&candidate, Some(index))?;
+                }
                 let profile = self.active_profile_mut()?;
-                let m = profile.mappings.get_mut(index).ok_or("index out of range")?;
+                let m = profile.mappings.get_mut(index).ok_or("这条映射不存在，可能已经被删除了")?;
                 m.mode = mode;
                 self.save()?;
                 self.reapply();
