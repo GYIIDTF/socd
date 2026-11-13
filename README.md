@@ -58,7 +58,7 @@ Windows 下的按键重映射工具，专为格斗游戏与横版平台的方向
 
 ## 安装与使用
 
-1. 从 [Releases](../../releases) 下载 `SOCD.exe`
+1. 从 [Releases](https://github.com/GYIIDTF/socd/releases/latest) 下载 `SOCD.exe`
 2. 放到一个可写目录（**不要放 `Program Files`**，程序需要在旁边生成配置）
 3. 双击运行。首次启动会打开配置界面，之后都是静默启动，只留托盘图标
 4. 需要改配置时，左键点托盘图标打开界面。关掉标签页不影响映射
