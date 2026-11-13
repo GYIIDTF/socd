@@ -1661,7 +1661,6 @@ function renderRows() {
         beginCapture(i, e.currentTarget.dataset.side);
       }
     };
-
     host.appendChild(row);
   });
 }
@@ -1709,6 +1708,15 @@ function cancelCapture() {
 }
 
 function beginCapture(mappingIndex, side) {
+  // 左边的键还空着就点右边：直接跳到左边。
+  // 否则会存下一条"有目标没源键"的残缺映射，既不可用也看不出问题。
+  const profile0 = state && state.profiles[state.activeIndex];
+  const row0 = profile0 && profile0.mappings[mappingIndex];
+  if (side === "destination" && row0 && !row0.sourceName) {
+    side = "source";
+    notify("请先设置左边的按键");
+  }
+
   cancelCapture();
   capture = { mappingIndex, side };
   renderRows();
