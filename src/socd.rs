@@ -136,6 +136,11 @@ pub struct KeyState {
     ///
     /// 同时它也是钩子关闭时的补发清单：非零项就是仍处于按下状态的目标键。
     held_by: Vec<u32>,
+    /// 物理事件被完全藏起来的修饰键。
+    ///
+    /// 系统从没见过它的按下，所以后续的重复、松开都不能放出去——否则会
+    /// 看到一个孤立的 keydown/keyup 对，照样触发窗口菜单。
+    hidden: Vec<bool>,
 }
 
 impl Default for KeyState {
@@ -144,6 +149,7 @@ impl Default for KeyState {
             down: vec![false; BindTable::SIZE],
             suppressed: vec![false; BindTable::SIZE],
             held_by: vec![0; BindTable::SIZE],
+            hidden: vec![false; BindTable::SIZE],
         }
     }
 }
@@ -171,6 +177,16 @@ impl KeyState {
 
     /// Clears everything — used when hooks are torn down so no stale state leaks
     /// between profiles.
+    pub fn is_hidden(&self, code: ScanCode) -> bool {
+        self.hidden.get(code as usize).copied().unwrap_or(false)
+    }
+
+    pub fn set_hidden(&mut self, code: ScanCode, v: bool) {
+        if let Some(slot) = self.hidden.get_mut(code as usize) {
+            *slot = v;
+        }
+    }
+
     /// 目标键多了一个源键按住。返回 true 表示需要真正注入 down。
     pub fn acquire(&mut self, code: ScanCode) -> bool {
         match self.held_by.get_mut(code as usize) {
@@ -208,6 +224,7 @@ impl KeyState {
     pub fn reset(&mut self) {
         self.down.iter_mut().for_each(|d| *d = false);
         self.suppressed.iter_mut().for_each(|d| *d = false);
+        self.hidden.iter_mut().for_each(|d| *d = false);
         // injected 不清空：调用方要用它补发 up
     }
 }
@@ -289,7 +306,9 @@ pub fn handle_with(
                 let suppressed = state.suppressed(code);
                 state.set(code, true);
                 if is_repeat {
-                    if suppressed {
+                    // hidden 优先：修饰键的物理事件被完全藏起来之后，
+                    // 它的每一次重复都不能让系统看见。
+                    if state.is_hidden(code) || suppressed {
                         Outcome::swallow(vec![])
                     } else {
                         Outcome::through()
@@ -298,13 +317,19 @@ pub fn handle_with(
                     // Last one pressed wins: release the opposite, then let this
                     // key through so the game sees the new direction.
                     state.set_suppressed(bind.destination, true);
-                    state.set_suppressed(code, false);
                     if is_modifier {
                         // 修饰键不能让系统看到裸 keydown，否则会激活窗口菜单
                         // （Alt）或系统搜索（Win）。伙伴已经按着，说明这是
                         // 一次有意的映射操作，不是要调系统功能。
+                        //
+                        // 关键：把自己也标成 suppressed。按住不放会产生一
+                        // 连串重复 keydown，那些走上面的 is_repeat 分支；
+                        // 不标记的话每个重复都会被放行，菜单照样弹出来。
+                        state.set_suppressed(code, true);
+                        state.set_hidden(code, true);
                         Outcome::swallow(vec![Inject::Up(bind.destination)])
                     } else {
+                        state.set_suppressed(code, false);
                         Outcome::through_with(vec![Inject::Up(bind.destination)])
                     }
                 } else {
@@ -313,8 +338,14 @@ pub fn handle_with(
                 }
             } else {
                 let opposite_down = state.is_down(bind.destination);
+                let was_hidden = state.is_hidden(code);
                 state.set(code, false);
                 state.set_suppressed(code, false);
+                if was_hidden {
+                    // 系统从没收到这个键的按下，它的松开也不能发出去。
+                    state.set_hidden(code, false);
+                    return Outcome::swallow(vec![]);
+                }
                 if opposite_down && mode != MappingMode::OppositeNoRepress {
                     // The winner was released while the opposite is still held:
                     // re-press it so the character keeps moving.
@@ -516,6 +547,51 @@ mod tests {
         let alt = handle_with(&t, &mut st, ALT, true, false, true); // 再按 Alt
         assert_eq!(alt.pass, Pass::Swallow, "修饰键必须吞掉，不能激活系统菜单");
         assert_eq!(alt.actions, vec![Inject::Up(SPACE)]);
+    }
+
+    /// 按住修饰键产生的自动重复也必须吞掉。
+    ///
+    /// 只吞"按下那一刻"是不够的：按住不放，系统会持续产生重复 keydown，
+    /// 每一个都会重新触发窗口菜单。用户看到的正是"单点没事、按住就弹"。
+    #[test]
+    fn modifier_repeat_stays_swallowed() {
+        const ALT: ScanCode = 0x38;
+        const SPACE: ScanCode = 0x39;
+        let t = table_with(MappingMode::Opposite, ALT, SPACE);
+        let mut st = KeyState::default();
+
+        handle_with(&t, &mut st, SPACE, true, false, false);
+        let first = handle_with(&t, &mut st, ALT, true, false, true);
+        assert_eq!(first.pass, Pass::Swallow, "首次按下要吞");
+
+        // 按住 Alt 产生的重复：每一次都必须吞
+        for i in 0..5 {
+            let r = handle_with(&t, &mut st, ALT, true, true, true);
+            assert_eq!(r.pass, Pass::Swallow, "第 {i} 次重复被放行了");
+            assert!(r.actions.is_empty(), "重复不该再注入");
+        }
+    }
+
+    /// 松开伙伴后，被吞的修饰键仍不能把物理事件放出去。
+    ///
+    /// Alt 的 keydown 早就被吞了，系统那边从来没有"Alt 按下"这回事。
+    /// 此时若因为伙伴松开而放行后续的 Alt 事件，系统会看到一个孤立的
+    /// keydown/keyup 对，照样触发菜单。
+    #[test]
+    fn modifier_stays_hidden_after_partner_released() {
+        const ALT: ScanCode = 0x38;
+        const SPACE: ScanCode = 0x39;
+        let t = table_with(MappingMode::Opposite, ALT, SPACE);
+        let mut st = KeyState::default();
+
+        handle_with(&t, &mut st, SPACE, true, false, false);
+        handle_with(&t, &mut st, ALT, true, false, true);   // Alt 被吞
+        // 空格松开：按"重按先按方向"的规则会注入 Down(空格)
+        let sp_up = handle_with(&t, &mut st, SPACE, false, false, false);
+        // Alt 仍在按着，它的重复/松开都不该让系统看到
+        let alt_rep = handle_with(&t, &mut st, ALT, true, true, true);
+        assert_eq!(alt_rep.pass, Pass::Swallow, "伙伴松开后 Alt 的重复仍要吞");
+        let _ = sp_up;
     }
 
     /// 单独按 Alt 不能被吞——否则 Alt+Tab、Alt+F4 全废。
