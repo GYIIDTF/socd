@@ -224,6 +224,24 @@ pub fn handle(
     is_down: bool,
     is_repeat: bool,
 ) -> Outcome {
+    handle_with(table, state, code, is_down, is_repeat, false)
+}
+
+/// 同 `handle`，额外告知"这个键是否是修饰键"（Alt/Ctrl/Shift/Win）。
+///
+/// 修饰键需要特殊处理：Windows 看到裸 Alt 的 keydown 就会激活窗口菜单，
+/// 而那个判断发生在低层钩子之外——只要放行就来不及了。所以当修饰键作为
+/// 对向映射的源键、并且它的伙伴已经按着时，连物理事件一起吞掉。
+///
+/// 只在"伙伴已按下"这一种情况下吞：单独按 Alt、Alt+F4、Alt+Tab 都不受影响。
+pub fn handle_with(
+    table: &BindTable,
+    state: &mut KeyState,
+    code: ScanCode,
+    is_down: bool,
+    is_repeat: bool,
+    is_modifier: bool,
+) -> Outcome {
     let bind = match table.get(code) {
         Some(b) => b,
         None => {
@@ -281,7 +299,14 @@ pub fn handle(
                     // key through so the game sees the new direction.
                     state.set_suppressed(bind.destination, true);
                     state.set_suppressed(code, false);
-                    Outcome::through_with(vec![Inject::Up(bind.destination)])
+                    if is_modifier {
+                        // 修饰键不能让系统看到裸 keydown，否则会激活窗口菜单
+                        // （Alt）或系统搜索（Win）。伙伴已经按着，说明这是
+                        // 一次有意的映射操作，不是要调系统功能。
+                        Outcome::swallow(vec![Inject::Up(bind.destination)])
+                    } else {
+                        Outcome::through_with(vec![Inject::Up(bind.destination)])
+                    }
                 } else {
                     state.set_suppressed(code, false);
                     Outcome::through()
@@ -476,6 +501,46 @@ mod tests {
         let repeat = handle(&t, &mut st, A, true, true);
         assert!(repeat.actions.is_empty());
         assert_eq!(repeat.pass, Pass::Swallow, "被压制键的重复不能放行");
+    }
+
+    /// 修饰键作为源键、伙伴已按下时，物理事件必须吞掉——否则 Windows
+    /// 看到裸 Alt 会激活窗口菜单，用户配的 Alt↔空格 就废了。
+    #[test]
+    fn modifier_swallowed_when_partner_held() {
+        const ALT: ScanCode = 0x38;
+        const SPACE: ScanCode = 0x39;
+        let t = table_with(MappingMode::Opposite, ALT, SPACE);
+        let mut st = KeyState::default();
+
+        handle_with(&t, &mut st, SPACE, true, false, false);   // 先按空格
+        let alt = handle_with(&t, &mut st, ALT, true, false, true); // 再按 Alt
+        assert_eq!(alt.pass, Pass::Swallow, "修饰键必须吞掉，不能激活系统菜单");
+        assert_eq!(alt.actions, vec![Inject::Up(SPACE)]);
+    }
+
+    /// 单独按 Alt 不能被吞——否则 Alt+Tab、Alt+F4 全废。
+    #[test]
+    fn modifier_alone_passes_through() {
+        const ALT: ScanCode = 0x38;
+        const SPACE: ScanCode = 0x39;
+        let t = table_with(MappingMode::Opposite, ALT, SPACE);
+        let mut st = KeyState::default();
+
+        let alt = handle_with(&t, &mut st, ALT, true, false, true);
+        assert_eq!(alt.pass, Pass::Through, "单独按 Alt 必须放行");
+        assert!(alt.actions.is_empty());
+    }
+
+    /// 非修饰键不受这条规则影响，行为与原来一致。
+    #[test]
+    fn non_modifier_still_passes_through() {
+        let t = table_with(MappingMode::Opposite, A, D);
+        let mut st = KeyState::default();
+
+        handle_with(&t, &mut st, A, true, false, false);
+        let d = handle_with(&t, &mut st, D, true, false, false);
+        assert_eq!(d.pass, Pass::Through, "普通键照常放行");
+        assert_eq!(d.actions, vec![Inject::Up(A)]);
     }
 
     #[test]

@@ -710,7 +710,9 @@ impl App {
                 let is_repeat = m.keys.is_down(scan) && down;
                 let (actions, pass) = {
                     let crate::win::Machine { table, keys } = &mut *m;
-                    let out = crate::socd::handle(table, keys, scan, down, is_repeat);
+                    let out = crate::socd::handle_with(
+                        table, keys, scan, down, is_repeat, win::is_modifier_scan(scan),
+                    );
                     (out.actions, out.pass)
                 };
                 Ok(json!({

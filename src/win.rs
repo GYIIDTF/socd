@@ -24,6 +24,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     LLKHF_INJECTED, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
 };
 
+use crate::settings::ScanCode;
 use crate::socd::{self, BindTable, Inject, KeyState, Pass};
 
 const MAX_PATH: usize = 260;
@@ -151,7 +152,10 @@ unsafe extern "system" fn hook_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM)
             let Machine { table, keys } = &mut *m;
             // 注入计数由 handle 内部维护（见 KeyState::acquire/release），
             // 钩子关闭时靠它补发 up。
-            (socd::handle(table, keys, scan, is_down, repeat), repeat)
+            let out = socd::handle_with(
+                table, keys, scan, is_down, repeat, is_modifier_scan(scan),
+            );
+            (out, repeat)
         }
         Err(TryLockError::WouldBlock) => {
             return unsafe { CallNextHookEx(std::ptr::null_mut(), n_code, wparam, lparam) };
@@ -160,7 +164,10 @@ unsafe extern "system" fn hook_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM)
             let mut m = p.into_inner();
             let repeat = m.keys.is_down(scan) && is_down;
             let Machine { table, keys } = &mut *m;
-            (socd::handle(table, keys, scan, is_down, repeat), repeat)
+            let out = socd::handle_with(
+                table, keys, scan, is_down, repeat, is_modifier_scan(scan),
+            );
+            (out, repeat)
         }
     };
 
@@ -193,6 +200,18 @@ unsafe extern "system" fn hook_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM)
     } else {
         unsafe { CallNextHookEx(std::ptr::null_mut(), n_code, wparam, lparam) }
     }
+}
+
+/// 这些扫描码对应系统的修饰键。键盘钩子必须知道它们，因为 Windows 对
+/// 裸修饰键（尤其 Alt）有额外的系统行为，放行就会触发。
+pub fn is_modifier_scan(scan: ScanCode) -> bool {
+    matches!(
+        scan,
+        0x2A | 0x36        // 左/右 Shift
+        | 0x1D | 0xE01D    // 左/右 Ctrl
+        | 0x38 | 0xE038    // 左/右 Alt
+        | 0xE05B | 0xE05C  // 左/右 Win
+    )
 }
 
 /// 补发所有"已注入按下、尚未松开"的目标键。
