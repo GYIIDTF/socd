@@ -83,6 +83,12 @@ try:
     check("按 D 吞掉并释放 A", key(D, True), (True, [(False, A)]))
     check("松 D 放行", key(D, False), (False, []))
 
+    print("[普通键 · 相互抵消的重复]")
+    setup("NEUTRAL", A, D)
+    key(A, True); key(D, True)
+    check("A 重复不再释放 D", key(A, True), (True, []))
+    check("A 再重复仍不释放", key(A, True), (True, []))
+
     print("[普通键 · 重映射]")
     setup("REMAP", W, S)
     check("按 W 注入 S", key(W, True), (True, [(True, S)]))

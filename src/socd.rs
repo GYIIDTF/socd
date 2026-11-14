@@ -382,7 +382,16 @@ pub fn handle_with(
             if is_down {
                 let opposite_down = state.is_down(bind.destination);
                 state.set(code, true);
-                if opposite_down {
+                if is_repeat {
+                    // 重复事件不该再次"抵消"——伙伴早在第一次按下时就
+                    // 被释放了，重复发 Up 只是反复按一个已松开的键。
+                    // 被抵消的键重复时也别放行（游戏那边它本就不该在按着）。
+                    if opposite_down {
+                        Outcome::swallow(vec![])
+                    } else {
+                        Outcome::through()
+                    }
+                } else if opposite_down {
                     // Both cancel out: release the opposite and swallow this one.
                     Outcome::swallow(vec![Inject::Up(bind.destination)])
                 } else {
@@ -656,6 +665,29 @@ mod tests {
             vec![Inject::Up(ALT), Inject::Down(SPACE)],
             "松开 Alt 后必须把空格按回来"
         );
+    }
+
+    /// 相互抵消模式下，被抵消键的重复不能再注入一次 Up。
+    #[test]
+    fn neutral_repeat_does_not_release_again() {
+        let t = table_with(MappingMode::Neutral, A, D);
+        let mut st = KeyState::default();
+
+        handle(&t, &mut st, A, true, false);
+        let d = handle(&t, &mut st, D, true, false);
+        assert_eq!(d.actions, vec![Inject::Up(A)], "首次抵消释放 A");
+
+        // A 还在按着并重复：不该再发 Up
+        let r1 = handle(&t, &mut st, A, true, true);
+        assert!(r1.actions.is_empty(), "重复不该重复释放");
+        assert_eq!(r1.pass, Pass::Swallow, "被抵消的键重复不该放行");
+
+        // 单独按着的键重复时，仍该放行（游戏需要重复）
+        let t2 = table_with(MappingMode::Neutral, A, D);
+        let mut st2 = KeyState::default();
+        handle(&t2, &mut st2, A, true, false);
+        let solo = handle(&t2, &mut st2, A, true, true);
+        assert_eq!(solo.pass, Pass::Through, "没有伙伴时重复应放行");
     }
 
     /// 单独按 Alt 不能被吞——否则 Alt+Tab、Alt+F4 全废。
