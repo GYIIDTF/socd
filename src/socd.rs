@@ -353,7 +353,15 @@ pub fn handle_with(
                     // 这个键的物理按下被吞了、改由注入代替，所以物理松开
                     // 同样不能放行——要发出和注入按下对应的 up。
                     state.set_hidden(code, false);
-                    return Outcome::swallow(vec![Inject::Up(code)]);
+                    // 伙伴当时被我们释放了，现在轮到它重新生效。
+                    // 顺序与按下时相反：先松开自己，再按回伙伴，
+                    // 避免系统看到"两个都不按"的空档。
+                    let mut actions = vec![Inject::Up(code)];
+                    if opposite_down && mode != MappingMode::OppositeNoRepress {
+                        state.set_suppressed(bind.destination, false);
+                        actions.push(Inject::Down(bind.destination));
+                    }
+                    return Outcome::swallow(actions);
                 }
                 if opposite_down && mode != MappingMode::OppositeNoRepress {
                     // The winner was released while the opposite is still held:
@@ -610,6 +618,31 @@ mod tests {
         assert_eq!(alt_up.pass, Pass::Swallow);
         assert_eq!(alt_up.actions, vec![Inject::Up(ALT)], "必须补发注入键的 up");
         let _ = sp_up;
+    }
+
+    /// 松开修饰键后，被它压制过的伙伴必须重新生效。
+    ///
+    /// 按住空格 → 按 Alt（空格被释放、Alt 生效）→ 松开 Alt，
+    /// 此时空格还按着，应该重新亮起来。漏了这步的话，用户松开 Alt 后
+    /// 两个键都是熄灭状态——他明明还按着空格。
+    #[test]
+    fn modifier_release_restores_partner() {
+        const ALT: ScanCode = 0x38;
+        const SPACE: ScanCode = 0x39;
+        let t = table_with(MappingMode::Opposite, ALT, SPACE);
+        let mut st = KeyState::default();
+
+        handle_with(&t, &mut st, SPACE, true, false, false);       // 空格按下
+        handle_with(&t, &mut st, ALT, true, false, true);          // Alt 抢占
+
+        // 松开 Alt：空格仍按着，必须重新按下
+        let alt_up = handle_with(&t, &mut st, ALT, false, false, true);
+        assert_eq!(alt_up.pass, Pass::Swallow);
+        assert_eq!(
+            alt_up.actions,
+            vec![Inject::Up(ALT), Inject::Down(SPACE)],
+            "松开 Alt 后必须把空格按回来"
+        );
     }
 
     /// 单独按 Alt 不能被吞——否则 Alt+Tab、Alt+F4 全废。
