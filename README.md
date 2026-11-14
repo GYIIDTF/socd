@@ -133,7 +133,9 @@ SOCD_INSTANCE_SLOT=t ./release/SOCD.exe --port=17654
 python tests/e2e_func.py 17654     # 21 项：经真实命令通道驱动状态机
 python tests/e2e_real.py 17654     # 5 项：真实 Win32 钩子回调 + 按键注入
 python tests/probe_server.py 17654 # 可选：HTTP 服务的健壮性检查
-python tests/regress_modes.py ./release/SOCD.exe <临时目录> 17655  # 24 项：四种模式 × 普通键/修饰键的系统回归
+python tests/regress_modes.py ./release/SOCD.exe <临时目录> 17655  # 25 项：四种模式 × 普通键/修饰键的系统回归
+python tests/exhaust_modes.py ./release/SOCD.exe <临时目录> 17656 6  # 穷举：所有长度≤6 的事件序列
+EXH_MOD=1 python tests/exhaust_modes.py ./release/SOCD.exe <临时目录> 17657 6  # 同上，用 Alt/空格
 ```
 
 `SOCD_INSTANCE_SLOT` 给单实例锁加后缀，让测试实例与你正在用的实例互不干扰。

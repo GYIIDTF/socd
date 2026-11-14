@@ -187,6 +187,11 @@ impl App {
                 .copied()
                 .collect();
             let mut m = self.hook.machine.lock().unwrap();
+            // 换查找表前先把还按着的目标键松开，再清状态。
+            // 顺序不能反：reset 会清掉计数，之后就没法知道该补发哪些 up 了。
+            for code in m.keys.take_pending() {
+                win::inject_scancode(code, true);
+            }
             m.table.install(&effective);
             m.keys.reset();
         }

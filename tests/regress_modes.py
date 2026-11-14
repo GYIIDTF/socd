@@ -81,7 +81,8 @@ try:
     setup("NEUTRAL", A, D)
     check("按 A 放行", key(A, True), (False, []))
     check("按 D 吞掉并释放 A", key(D, True), (True, [(False, A)]))
-    check("松 D 放行", key(D, False), (False, []))
+    # A 还按着，抵消解除后要恢复它
+    check("松 D 恢复 A", key(D, False), (True, [(True, A)]))
 
     print("[普通键 · 相互抵消的重复]")
     setup("NEUTRAL", A, D)

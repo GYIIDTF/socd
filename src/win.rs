@@ -231,7 +231,7 @@ fn current_state() -> Option<Arc<HookState>> {
     STATE.try_lock().ok().and_then(|g| g.clone())
 }
 
-fn inject_scancode(scan: u32, key_up: bool) {
+pub fn inject_scancode(scan: u32, key_up: bool) {
     let extended = scan & EXTENDED_TAG != 0;
     let code = (scan & 0xFF) as u16;
 

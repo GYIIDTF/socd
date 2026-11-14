@@ -225,7 +225,12 @@ impl KeyState {
         self.down.iter_mut().for_each(|d| *d = false);
         self.suppressed.iter_mut().for_each(|d| *d = false);
         self.hidden.iter_mut().for_each(|d| *d = false);
-        // injected 不清空：调用方要用它补发 up
+        // 计数必须一起清零。留着非零值的话，下次按同一个源键时
+        // acquire 返回 false（计数变成 2 而不是 1），目标键根本不会被注入——
+        // 表现为"这个键突然映射失效，直到重启"。
+        //
+        // 调用方若要补发 up，应在 reset 之前用 take_pending 取走清单。
+        self.held_by.iter_mut().for_each(|n| *n = 0);
     }
 }
 
@@ -398,7 +403,18 @@ pub fn handle_with(
                     Outcome::through()
                 }
             } else {
+                let opposite_down = state.is_down(bind.destination);
                 state.set(code, false);
+                // 抵消的成立条件是"两个都按着"。松开自己后若伙伴还按着，
+                // 就不再有冲突了——伙伴应该恢复生效。
+                //
+                // 不做这步的话，玩家松开 A 后 D 明明按着却没反应，
+                // 必须松开重按才行。这与"后按生效"在松开时回到先按方向的
+                // 行为不对称。
+                if opposite_down {
+                    state.set_suppressed(bind.destination, false);
+                    return Outcome::swallow(vec![Inject::Down(bind.destination)]);
+                }
                 Outcome::through()
             }
         }
@@ -504,6 +520,28 @@ mod tests {
         }
         let up2 = handle(&t, &mut st, W, false, false);
         assert_eq!(up2.actions, vec![Inject::Up(S)], "多次重复后松开仍要发 up");
+    }
+
+    /// reset 必须清掉引用计数。
+    ///
+    /// 否则残留的非零计数会让下一次按下时 acquire 返回 false，
+    /// 目标键根本不注入——表现为"这个键突然失效，直到重启"。
+    #[test]
+    fn reset_clears_refcount() {
+        let mut t = BindTable::new();
+        t.install(&[Mapping { source: W, destination: S, mode: MappingMode::Remap }]);
+        let mut st = KeyState::default();
+
+        // 按下但故意不松开，模拟"切换配置时键还按着"
+        handle(&t, &mut st, W, true, false);
+        st.reset();
+
+        // reset 之后再按，必须能正常注入
+        let down = handle(&t, &mut st, W, true, false);
+        assert_eq!(down.actions, vec![Inject::Down(S)], "reset 后应重新注入");
+
+        let up = handle(&t, &mut st, W, false, false);
+        assert_eq!(up.actions, vec![Inject::Up(S)], "松开也要正常");
     }
 
     #[test]
@@ -751,10 +789,10 @@ mod tests {
         assert_eq!(d.pass, Pass::Swallow);
         assert_eq!(d.actions, vec![Inject::Up(A)]);
 
-        // Releasing either one does nothing special.
+        // 松开 D 时 A 还按着：不再构成"同时按下"，A 应恢复生效。
         let d_up = handle(&t, &mut st, D, false, false);
-        assert_eq!(d_up.pass, Pass::Through);
-        assert!(d_up.actions.is_empty());
+        assert_eq!(d_up.pass, Pass::Swallow);
+        assert_eq!(d_up.actions, vec![Inject::Down(A)], "抵消解除后剩下的键要恢复");
     }
 
     #[test]

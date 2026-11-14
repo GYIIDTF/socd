@@ -135,8 +135,10 @@ def main():
     m2 = rpc("probeKey", {"scan": D, "down": True})
     check("second key is swallowed", m2["swallowed"], True)
     check("second key releases opposite", m2["actions"], [{"scan": A, "down": False, "name": "A"}])
+    # 松开 D 时 A 还按着，抵消解除，A 恢复生效
     m3 = rpc("probeKey", {"scan": D, "down": False})
-    check("release passes through", m3["swallowed"], False)
+    check("release restores partner", m3["swallowed"], True)
+    check("partner re-pressed", m3["actions"], [{"scan": A, "down": True, "name": "A"}])
 
     # ---- unmapped key ----
     print("\n[unmapped]")
