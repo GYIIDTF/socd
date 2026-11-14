@@ -271,10 +271,14 @@ pub fn handle_with(
     match mode {
         MappingMode::Remap => {
             state.set(code, is_down);
-            // 自动重复不是新的一次按下，不能重复计数——否则计数永远归不了零，
-            // 松开时就不会发 up，目标键卡住。
             if is_repeat {
-                return Outcome::swallow(vec![]);
+                // 自动重复：原键吞掉，但要把重复"转发"给目标键。
+                //
+                // 直接丢弃是不行的——很多游戏靠重复事件实现长按连发、
+                // 蓄力、持续开火。漏掉重复这些行为就断了。
+                // 也不能重新 acquire（会把计数抬高，导致松开时归不了零），
+                // 所以只注入 Down、不碰计数。
+                return Outcome::swallow(vec![Inject::Down(bind.destination)]);
             }
             // 多个源键可以指向同一个目标键。按下时只有第一个真正注入 down，
             // 松开时只有最后一个才注入 up——否则 Q→W、E→W 同时按住时，
@@ -478,10 +482,19 @@ mod tests {
 
         handle(&t, &mut st, W, true, false);
         let r = handle(&t, &mut st, W, true, true);
-        assert!(r.actions.is_empty(), "重复不该再注入");
+        // 重复要转发给目标键：游戏靠它做长按连发／蓄力
+        assert_eq!(r.actions, vec![Inject::Down(S)], "重复应转发给目标键");
+        assert_eq!(r.pass, Pass::Swallow, "物理重复仍然吞掉");
 
         let up = handle(&t, &mut st, W, false, false);
         assert_eq!(up.actions, vec![Inject::Up(S)], "松开时必须还能发出 up");
+
+        // 再跑几次重复，确认计数没被抬高
+        for _ in 0..3 {
+            handle(&t, &mut st, W, true, true);
+        }
+        let up2 = handle(&t, &mut st, W, false, false);
+        assert_eq!(up2.actions, vec![Inject::Up(S)], "多次重复后松开仍要发 up");
     }
 
     #[test]
