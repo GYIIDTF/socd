@@ -318,16 +318,24 @@ pub fn handle_with(
                     // key through so the game sees the new direction.
                     state.set_suppressed(bind.destination, true);
                     if is_modifier {
-                        // 修饰键不能让系统看到裸 keydown，否则会激活窗口菜单
-                        // （Alt）或系统搜索（Win）。伙伴已经按着，说明这是
-                        // 一次有意的映射操作，不是要调系统功能。
+                        // 物理 Alt 的 keydown 会让 Windows 激活窗口菜单，而那个
+                        // 判断发生在钩子之外——所以物理事件必须吞掉。
                         //
-                        // 关键：把自己也标成 suppressed。按住不放会产生一
-                        // 连串重复 keydown，那些走上面的 is_repeat 分支；
-                        // 不标记的话每个重复都会被放行，菜单照样弹出来。
+                        // 但用户要的是 "Alt 生效"，不是 "Alt 消失"。解决办法：
+                        // 吞掉物理事件后注入一个等价的 Alt。注入事件带
+                        // LLKHF_INJECTED 标记，系统不会拿它触发菜单（实测确认），
+                        // 却会正常更新按键状态，游戏和其他程序都能看到 Alt 按下。
+                        //
+                        // hidden 继续标记：它约束的是"物理事件"的处理方式，
+                        // 后续的重复和松开都要按隐藏键的规则走。
                         state.set_suppressed(code, true);
                         state.set_hidden(code, true);
-                        Outcome::swallow(vec![Inject::Up(bind.destination)])
+                        // 先释放伙伴，再注入自己：顺序反了会让系统短暂看到
+                        // 两个键都不按，菜单有机会抢先。
+                        Outcome::swallow(vec![
+                            Inject::Up(bind.destination),
+                            Inject::Down(code),
+                        ])
                     } else {
                         state.set_suppressed(code, false);
                         Outcome::through_with(vec![Inject::Up(bind.destination)])
@@ -342,9 +350,10 @@ pub fn handle_with(
                 state.set(code, false);
                 state.set_suppressed(code, false);
                 if was_hidden {
-                    // 系统从没收到这个键的按下，它的松开也不能发出去。
+                    // 这个键的物理按下被吞了、改由注入代替，所以物理松开
+                    // 同样不能放行——要发出和注入按下对应的 up。
                     state.set_hidden(code, false);
-                    return Outcome::swallow(vec![]);
+                    return Outcome::swallow(vec![Inject::Up(code)]);
                 }
                 if opposite_down && mode != MappingMode::OppositeNoRepress {
                     // The winner was released while the opposite is still held:
@@ -545,8 +554,13 @@ mod tests {
 
         handle_with(&t, &mut st, SPACE, true, false, false);   // 先按空格
         let alt = handle_with(&t, &mut st, ALT, true, false, true); // 再按 Alt
-        assert_eq!(alt.pass, Pass::Swallow, "修饰键必须吞掉，不能激活系统菜单");
-        assert_eq!(alt.actions, vec![Inject::Up(SPACE)]);
+        assert_eq!(alt.pass, Pass::Swallow, "物理事件必须吞掉，不能激活系统菜单");
+        // 吞掉物理事件后注入一个等价 Alt，让"Alt 生效"名副其实
+        assert_eq!(
+            alt.actions,
+            vec![Inject::Up(SPACE), Inject::Down(ALT)],
+            "应先释放伙伴再注入 Alt"
+        );
     }
 
     /// 按住修饰键产生的自动重复也必须吞掉。
@@ -591,6 +605,10 @@ mod tests {
         // Alt 仍在按着，它的重复/松开都不该让系统看到
         let alt_rep = handle_with(&t, &mut st, ALT, true, true, true);
         assert_eq!(alt_rep.pass, Pass::Swallow, "伙伴松开后 Alt 的重复仍要吞");
+        // 松开 Alt 时要发出与注入按下配对的 up
+        let alt_up = handle_with(&t, &mut st, ALT, false, false, true);
+        assert_eq!(alt_up.pass, Pass::Swallow);
+        assert_eq!(alt_up.actions, vec![Inject::Up(ALT)], "必须补发注入键的 up");
         let _ = sp_up;
     }
 
