@@ -107,7 +107,7 @@ impl CrosshairStyle {
             CrosshairStyle::Cross => "CROSS",
             CrosshairStyle::Dot => "DOT",
             CrosshairStyle::Ring => "RING",
-            CrosshairStyle::TShape => "TSHAPE",
+            CrosshairStyle::TShape => "T_SHAPE",
         }
     }
 
@@ -116,7 +116,8 @@ impl CrosshairStyle {
             "CROSS" => Some(CrosshairStyle::Cross),
             "DOT" => Some(CrosshairStyle::Dot),
             "RING" => Some(CrosshairStyle::Ring),
-            "TSHAPE" => Some(CrosshairStyle::TShape),
+            // 兼容早期写错的 T 形拼写
+            "TSHAPE" | "T_SHAPE" => Some(CrosshairStyle::TShape),
             _ => None,
         }
     }

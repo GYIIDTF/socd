@@ -467,9 +467,11 @@ fn draw(surface: &mut Surface, cfg: &Crosshair) {
                         CrosshairStyle::Dot => distance <= dot_radius + pad,
                         CrosshairStyle::Ring => (distance - r).abs() <= hw,
                         CrosshairStyle::TShape => {
-                            // 上、左、右三向，没有下
-                            (dx <= hw && py <= -g && py >= -g - r)
-                                || (dy <= hw && dx >= g && dx <= g + r)
+                            // 和大写 T 一致：竖线从顶端贯到中心，横线横跨两侧，
+                            // 三段等长。中心不留空——T 本来就是连着的。
+                            let arm = g + r;
+                            (dx <= hw && py <= 0.0 && py >= -arm)
+                                || (dy <= hw && dx <= arm)
                         }
                     };
                     if inside {
