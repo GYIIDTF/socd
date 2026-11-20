@@ -800,6 +800,41 @@
     flex: none;
   }
 
+  /* 快捷键旁边的清除按钮。不用右键清空——那个手势要留给录入鼠标键。 */
+  .ch-clear {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: var(--md-corner-sm);
+    background: var(--white);
+    color: var(--ink-5);
+    cursor: pointer;
+    padding: 0;
+    transition: color var(--md-dur) var(--md-ease),
+                border-color var(--md-dur) var(--md-ease),
+                background var(--md-dur) var(--md-ease);
+  }
+
+  .ch-clear:hover {
+    color: var(--ink);
+    border-color: var(--line-strong);
+    background: var(--hover-on-light);
+  }
+
+  .ch-clear:disabled {
+    opacity: .35;
+    cursor: default;
+  }
+
+  .ch-clear:disabled:hover {
+    color: var(--ink-5);
+    border-color: var(--line);
+    background: var(--white);
+  }
+
   /* 预览 */
   .ch-preview-wrap { margin-top: 18px; }
 
@@ -1701,10 +1736,26 @@
         </div>
 
         <div class="ch-row">
-          <label class="ch-label">快捷键</label>
+          <label class="ch-label">显示快捷键</label>
           <div class="ch-field">
             <button class="cap ch-key" id="ch-key" data-side="key">未设置</button>
-            <span class="ch-hint">可录键盘键或鼠标左/右/中/侧键，右键清空</span>
+            <button class="ch-clear" id="ch-key-clear" title="清除快捷键" aria-label="清除快捷键">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            <span class="ch-hint">临时开关准星，不改配置的启用状态</span>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">启用快捷键</label>
+          <div class="ch-field">
+            <button class="cap ch-key" id="ch-enable-key" data-side="key">未设置</button>
+            <button class="ch-clear" id="ch-enable-key-clear" title="清除快捷键" aria-label="清除快捷键">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            <span class="ch-hint">切换当前配置的启用状态</span>
           </div>
         </div>
 
@@ -2174,9 +2225,14 @@ function renderCrosshair() {
   bindNum("ch-offset-x", "offset_x");
   bindNum("ch-offset-y", "offset_y");
 
-  // 开关键
-  const keyBtn = document.getElementById("ch-key");
-  keyBtn.textContent = state.hotkeyName || "未设置";
+  // 两个快捷键
+  document.getElementById("ch-key").textContent = state.hotkeyName || "未设置";
+  document.getElementById("ch-enable-key").textContent =
+    state.enableHotkeyName || "未设置";
+
+  // 没设置时清除按钮灰掉
+  document.getElementById("ch-key-clear").disabled = !state.hotkey;
+  document.getElementById("ch-enable-key-clear").disabled = !state.enableHotkey;
 
   renderCrosshairPreview(c);
 
@@ -2499,28 +2555,35 @@ document.getElementById("ch-enabled").onclick = () => {
 };
 
 // 开关键捕获：和映射键位框用同一套思路
-document.getElementById("ch-key").onclick = () => beginKeyCapture();
-document.getElementById("ch-key").oncontextmenu = (e) => {
-  // 捕获中按右键是要"录成鼠标右键"，不是清空
-  if (chCapturing) return;
-  e.preventDefault();
-  invoke("setCrosshairKey", { hotkey: null })
-    .then(s => { state = s; renderCrosshair(); })
-    .catch(err => notify(err.message, true, 6000));
+// 两个快捷键：显示开关、启用开关。
+// 清空靠旁边的 × 按钮，不用右键——右键要留给"录成鼠标右键"。
+const HOTKEY_SLOTS = {
+  show:   { btn: "ch-key",        clear: "ch-key-clear",        field: "hotkey" },
+  enable: { btn: "ch-enable-key", clear: "ch-enable-key-clear", field: "enableHotkey" },
 };
 
-let chCapturing = false;
+Object.entries(HOTKEY_SLOTS).forEach(([slot, cfg]) => {
+  document.getElementById(cfg.btn).onclick = () => beginKeyCapture(slot);
+  document.getElementById(cfg.clear).onclick = () => {
+    invoke("setCrosshairKey", { [cfg.field]: null })
+      .then(s => { state = s; renderCrosshair(); })
+      .catch(err => notify(err.message, true, 6000));
+  };
+});
 
-function beginKeyCapture() {
+let chCapturing = null;   // 正在捕获哪个槽位，null 表示没在捕获
+
+function beginKeyCapture(slot) {
   if (chCapturing) return;
-  chCapturing = true;
-  const btn = document.getElementById("ch-key");
+  chCapturing = slot;
+  const cfg = HOTKEY_SLOTS[slot];
+  const btn = document.getElementById(cfg.btn);
   btn.textContent = "按下按键或鼠标";
 
   const finish = (hotkey) => {
     cleanup();
     if (hotkey === undefined) return;
-    invoke("setCrosshairKey", { hotkey })
+    invoke("setCrosshairKey", { [cfg.field]: hotkey })
       .then(s => { state = s; renderCrosshair(); })
       .catch(() => notify("这个按键无法用作快捷键", true, 6000));
   };
@@ -2534,13 +2597,8 @@ function beginKeyCapture() {
       .catch(() => finish(undefined));
   };
 
-  // 鼠标键：左/右/中/侧键。只在捕获状态下拦截，平时完全不影响使用。
-  //
-  // 只监听 mousedown：右键在 mousedown 阶段就能识别（button === 2）。
-  // 同时注册 contextmenu 会出问题——右键先触发 mousedown，处理完就
-  // cleanup 了，随后到达 ch-key 的 contextmenu 看到的 chCapturing 已经
-  // 是 false，于是走了"清空快捷键"分支。stopImmediatePropagation 只能
-  // 拦同一个事件，拦不住另一个。
+  // 鼠标键：左/右/中/侧键。只在 mousedown 阶段识别——
+  // 右键在这里就能判断（button === 2），不必等 contextmenu。
   const onMouse = (e) => {
     e.preventDefault();
     e.stopImmediatePropagation();
@@ -2552,14 +2610,14 @@ function beginKeyCapture() {
     finish({ kind: "MOUSE", code });
   };
 
-  // 捕获期间屏蔽右键菜单，否则录右键时会弹出浏览器菜单
+  // 捕获期间屏蔽浏览器右键菜单，否则录右键时会弹出
   const onContext = (e) => {
     e.preventDefault();
     e.stopImmediatePropagation();
   };
 
   function cleanup() {
-    chCapturing = false;
+    chCapturing = null;
     window.removeEventListener("keydown", handler, true);
     document.removeEventListener("mousedown", onMouse, true);
     document.removeEventListener("contextmenu", onContext, true);
@@ -2567,8 +2625,7 @@ function beginKeyCapture() {
   }
 
   // 捕获期间点哪里都算"选了那个鼠标键"，所以不注册"点外面取消"。
-  // 要退出按 Esc。这和映射键位框的行为不同——那里点外面能取消，因为
-  // 捕获的是键盘键；这里鼠标本身就是候选，没法和"点外面"区分。
+  // 要退出按 Esc。
   window.addEventListener("keydown", handler, true);
   document.addEventListener("mousedown", onMouse, true);
   document.addEventListener("contextmenu", onContext, true);

@@ -52,6 +52,16 @@ pub struct KeyEvent {
     pub kind: HotkeyKind,
     pub code: u16,
     pub down: bool,
+    /// 哪个槽位的快捷键触发了："show"（显示开关）或 "enable"（启用开关）
+    pub slot: HotkeySlot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeySlot {
+    /// 控制准星是否显示
+    Show,
+    /// 控制配置的启用状态
+    Enable,
 }
 
 /// 钩子状态的共享位：窗口过程把事件写进来，主线程取走。
@@ -63,8 +73,9 @@ pub struct RawInputState {
     pub input_count: std::sync::atomic::AtomicU64,
     /// 解析出的事件数（诊断用）
     pub event_count: std::sync::atomic::AtomicU64,
-    /// 当前监听的快捷键。变化时重新注册设备。
+    /// 当前监听的两个快捷键。任一变化时重新注册设备。
     pub hotkey: std::sync::Mutex<Option<Hotkey>>,
+    pub enable_hotkey: std::sync::Mutex<Option<Hotkey>>,
     /// 已到达的事件，由主线程 drain。
     pub events: std::sync::Mutex<Vec<KeyEvent>>,
     /// 是否已经注册过设备。
@@ -73,6 +84,7 @@ pub struct RawInputState {
     /// 上次的按键状态，用来过滤重复的 WM_INPUT。
     pub last_code: AtomicU16,
     pub last_down: AtomicBool,
+    pub last_slot: std::sync::atomic::AtomicU8,
 }
 
 impl Default for RawInputState {
@@ -82,11 +94,13 @@ impl Default for RawInputState {
             input_count: std::sync::atomic::AtomicU64::new(0),
             event_count: std::sync::atomic::AtomicU64::new(0),
             hotkey: std::sync::Mutex::new(None),
+            enable_hotkey: std::sync::Mutex::new(None),
             events: std::sync::Mutex::new(Vec::new()),
             registered_kb: AtomicBool::new(false),
             registered_mouse: AtomicBool::new(false),
             last_code: AtomicU16::new(0),
             last_down: AtomicBool::new(false),
+            last_slot: std::sync::atomic::AtomicU8::new(255),
         }
     }
 }
@@ -95,13 +109,26 @@ impl Default for RawInputState {
 ///
 /// 只注册需要的类别：快捷键是键盘就只收键盘，是鼠标就只收鼠标。
 /// 切换类别时先移除旧的，避免同时收两类事件。
-pub fn reconfigure(hwnd: HWND, state: &RawInputState, hotkey: Option<Hotkey>) {
+pub fn reconfigure(
+    hwnd: HWND,
+    state: &RawInputState,
+    hotkey: Option<Hotkey>,
+    enable_hotkey: Option<Hotkey>,
+) {
     if let Ok(mut cur) = state.hotkey.lock() {
         *cur = hotkey;
     }
+    if let Ok(mut cur) = state.enable_hotkey.lock() {
+        *cur = enable_hotkey;
+    }
 
-    let want_kb = hotkey.map(|h| h.kind == HotkeyKind::Keyboard).unwrap_or(false);
-    let want_mouse = hotkey.map(|h| h.kind == HotkeyKind::Mouse).unwrap_or(false);
+    // 两个键可能是不同类型（一个键盘一个鼠标），任一是哪类就得注册那类
+    let kb = hotkey.map(|h| h.kind == HotkeyKind::Keyboard).unwrap_or(false)
+        || enable_hotkey.map(|h| h.kind == HotkeyKind::Keyboard).unwrap_or(false);
+    let mouse = hotkey.map(|h| h.kind == HotkeyKind::Mouse).unwrap_or(false)
+        || enable_hotkey.map(|h| h.kind == HotkeyKind::Mouse).unwrap_or(false);
+    let want_kb = kb;
+    let want_mouse = mouse;
 
     let kb_on = state.registered_kb.swap(want_kb, Ordering::Relaxed);
     let mouse_on = state.registered_mouse.swap(want_mouse, Ordering::Relaxed);
@@ -158,11 +185,26 @@ fn set_device(hwnd: HWND, keyboard: bool, enable: bool) -> bool {
 /// 窗口过程里调用：解析 `WM_INPUT`，把匹配的事件推进队列。
 pub fn handle_wm_input(lparam: LPARAM, state: &RawInputState) {
     state.input_count.fetch_add(1, Ordering::Relaxed);
-    let target = match state.hotkey.lock() {
-        Ok(h) => *h,
-        Err(_) => return,
+    let show_key = state.hotkey.lock().ok().and_then(|h| *h);
+    let enable_key = state.enable_hotkey.lock().ok().and_then(|h| *h);
+    if show_key.is_none() && enable_key.is_none() {
+        return;
+    }
+
+    // 在已注册的两个键里找一个匹配项，并记住它属于哪个槽位
+    let find = |kind: HotkeyKind, code: u16| -> Option<HotkeySlot> {
+        if let Some(k) = show_key {
+            if k.kind == kind && k.code == code {
+                return Some(HotkeySlot::Show);
+            }
+        }
+        if let Some(k) = enable_key {
+            if k.kind == kind && k.code == code {
+                return Some(HotkeySlot::Enable);
+            }
+        }
+        None
     };
-    let Some(target) = target else { return };
 
     let mut size: u32 = 0;
     unsafe {
@@ -195,7 +237,7 @@ pub fn handle_wm_input(lparam: LPARAM, state: &RawInputState) {
     let raw = unsafe { &*(buf.as_ptr() as *const RAWINPUT) };
     let kind = unsafe { raw.header.dwType };
 
-    let event = if kind == RIM_TYPEKEYBOARD && target.kind == HotkeyKind::Keyboard {
+    let event = if kind == RIM_TYPEKEYBOARD {
         let kb = unsafe { &raw.data.keyboard };
         // 扫描码 + 扩展标记，和系统的扫描码约定一致
         let mut code = kb.MakeCode as u16;
@@ -203,11 +245,9 @@ pub fn handle_wm_input(lparam: LPARAM, state: &RawInputState) {
             code |= 0xE100;
         }
         let down = kb.Flags & RI_KEY_BREAK == 0;
-        if code != target.code {
-            return;
-        }
-        KeyEvent { kind: HotkeyKind::Keyboard, code, down }
-    } else if kind == RIM_TYPEMOUSE && target.kind == HotkeyKind::Mouse {
+        let Some(slot) = find(HotkeyKind::Keyboard, code) else { return };
+        KeyEvent { kind: HotkeyKind::Keyboard, code, down, slot }
+    } else if kind == RIM_TYPEMOUSE {
         let mouse = unsafe { &raw.data.mouse };
         let low = unsafe { mouse.Anonymous.Anonymous.usButtonFlags };
 
@@ -235,22 +275,22 @@ pub fn handle_wm_input(lparam: LPARAM, state: &RawInputState) {
             return;
         };
 
-        if code != target.code {
-            return;
-        }
-        KeyEvent { kind: HotkeyKind::Mouse, code, down }
+        let Some(slot) = find(HotkeyKind::Mouse, code) else { return };
+        KeyEvent { kind: HotkeyKind::Mouse, code, down, slot }
     } else {
         return;
     };
 
     // 有些设备会重复上报同一状态，过滤掉
     let same = state.last_code.load(Ordering::Relaxed) == event.code
-        && state.last_down.load(Ordering::Relaxed) == event.down;
+        && state.last_down.load(Ordering::Relaxed) == event.down
+        && state.last_slot.load(Ordering::Relaxed) == event.slot as u8;
     if same {
         return;
     }
     state.last_code.store(event.code, Ordering::Relaxed);
     state.last_down.store(event.down, Ordering::Relaxed);
+    state.last_slot.store(event.slot as u8, Ordering::Relaxed);
 
     if let Ok(mut q) = state.events.lock() {
         if q.len() < 32 {

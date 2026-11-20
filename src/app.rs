@@ -59,6 +59,8 @@ pub struct StateView {
     pub hotkey_held: bool,
     /// 快捷键的显示名，由后端统一生成，避免前后端两套命名
     pub hotkey_name: Option<String>,
+    pub enable_hotkey: Option<crate::settings::Hotkey>,
+    pub enable_hotkey_name: Option<String>,
     /// Raw Input 是否注册成功
     pub hotkey_registered: bool,
     pub raw_input_count: u64,
@@ -206,7 +208,7 @@ impl App {
         // 按已保存的配置注册准星快捷键。不注册的话重启后快捷键失效，
         // 用户得重新设一次——而他不会想到要这么做。
         if let (Some(overlay), Some(hk)) = (app.overlay.as_ref(), app.settings.hotkey) {
-            overlay.set_hotkey(Some(hk));
+            overlay.set_hotkey(Some(hk), app.settings.enable_hotkey);
         }
 
         match win::install(app.hook.clone()) {
@@ -307,29 +309,49 @@ impl App {
             return;
         }
 
-        // 快捷键只控制"是否显示"，不碰配置里的"启用"。
+        // 两个快捷键各管一摊：
+        //   Show   —— 准星是否显示（临时开关，不动配置）
+        //   Enable —— 当前配置的启用状态（会写盘）
         //
-        // 两者是"与"的关系：配置没启用时不显示，快捷键关掉时也不显示。
-        // 分开的好处是——用户可以在界面里把准星设好但不启用，
-        // 进游戏后按快捷键临时打开，退出游戏再按一下关掉，
-        // 不必每次回界面改配置。
+        // 分开的好处是用户可以在界面里把准星设好但不启用，
+        // 进游戏按 Show 快捷键临时打开，退出再按一下关掉，不必回界面。
         let mode = self.settings.hotkey_mode;
+        let mut enable_dirty = false;
         for ev in events {
-            self.hotkey_held = ev.down;
-            match mode {
-                crate::settings::HotkeyMode::Toggle => {
-                    // 只在按下时翻转，松开不动
-                    if ev.down {
-                        self.crosshair_armed = !self.crosshair_armed;
+            match ev.slot {
+                crate::rawinput::HotkeySlot::Show => {
+                    self.hotkey_held = ev.down;
+                    match mode {
+                        crate::settings::HotkeyMode::Toggle => {
+                            if ev.down {
+                                self.crosshair_armed = !self.crosshair_armed;
+                            }
+                        }
+                        crate::settings::HotkeyMode::HoldToHide => {
+                            self.crosshair_armed = !ev.down;
+                        }
+                        crate::settings::HotkeyMode::HoldToShow => {
+                            self.crosshair_armed = ev.down;
+                        }
                     }
                 }
-                crate::settings::HotkeyMode::HoldToHide => {
-                    self.crosshair_armed = !ev.down;
-                }
-                crate::settings::HotkeyMode::HoldToShow => {
-                    self.crosshair_armed = ev.down;
+                crate::rawinput::HotkeySlot::Enable => {
+                    // 启用开关只认按下那一下，按住不放不该连续翻转
+                    if ev.down {
+                        let idx = self
+                            .settings
+                            .active_profile_index
+                            .min(self.settings.profiles.len().saturating_sub(1));
+                        if let Some(p) = self.settings.profiles.get_mut(idx) {
+                            p.crosshair.enabled = !p.crosshair.enabled;
+                            enable_dirty = true;
+                        }
+                    }
                 }
             }
+        }
+        if enable_dirty {
+            let _ = self.save();
         }
         self.refresh_now();
     }
@@ -478,6 +500,11 @@ impl App {
             modes: mode_options(),
             crosshair_available: self.overlay.is_some(),
             crosshair_armed: self.crosshair_armed,
+            enable_hotkey_name: self.settings.enable_hotkey.map(|h| match h.kind {
+                crate::settings::HotkeyKind::Keyboard => win::key_name(h.code as u32),
+                crate::settings::HotkeyKind::Mouse => mouse_key_name(h.code).to_string(),
+            }),
+            enable_hotkey: self.settings.enable_hotkey,
             hotkey_name: self.settings.hotkey.map(|h| match h.kind {
                 crate::settings::HotkeyKind::Keyboard => win::key_name(h.code as u32),
                 crate::settings::HotkeyKind::Mouse => mouse_key_name(h.code).to_string(),
@@ -866,24 +893,37 @@ impl App {
             }
 
             "setCrosshairKey" => {
-                // kind = "KEYBOARD" | "MOUSE"，code = 扫描码或鼠标键位。
-                // 传 null 表示清空快捷键。
-                let hk = match payload.get("hotkey") {
-                    Some(v) if !v.is_null() => {
-                        let kind = v
-                            .get("kind")
-                            .and_then(Value::as_str)
-                            .and_then(crate::settings::HotkeyKind::from_settings_str)
-                            .ok_or("bad hotkey kind")?;
-                        let code = v.get("code").and_then(Value::as_u64).ok_or("bad hotkey code")? as u16;
-                        Some(crate::settings::Hotkey { kind, code })
+                // hotkey / enableHotkey 二选一，传 null 表示清空。
+                // 两者都是 {kind, code} 结构。
+                let parse = |key: &str| -> Result<Option<crate::settings::Hotkey>, String> {
+                    match payload.get(key) {
+                        Some(v) if !v.is_null() => {
+                            let kind = v
+                                .get("kind")
+                                .and_then(Value::as_str)
+                                .and_then(crate::settings::HotkeyKind::from_settings_str)
+                                .ok_or("bad hotkey kind")?;
+                            let code = v
+                                .get("code")
+                                .and_then(Value::as_u64)
+                                .ok_or("bad hotkey code")? as u16;
+                            Ok(Some(crate::settings::Hotkey { kind, code }))
+                        }
+                        _ => Ok(None),
                     }
-                    _ => None,
                 };
 
-                self.settings.hotkey = hk;
+                if payload.get("hotkey").is_some() {
+                    self.settings.hotkey = parse("hotkey")?;
+                }
+                if payload.get("enableHotkey").is_some() {
+                    self.settings.enable_hotkey = parse("enableHotkey")?;
+                }
                 if let Some(overlay) = self.overlay.as_ref() {
-                    overlay.set_hotkey(hk);
+                    overlay.set_hotkey(
+                        self.settings.hotkey,
+                        self.settings.enable_hotkey,
+                    );
                 }
                 self.save()?;
                 // 换了快捷键，按住状态从零开始
