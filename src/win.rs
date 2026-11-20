@@ -58,12 +58,6 @@ pub struct HookState {
     /// Test-only: process injected events too, so an automated test can drive
     /// the real hook callback without a physical keyboard. Off in normal runs.
     pub accept_injected: AtomicBool,
-    /// 准星开关键的扫描码。全局生效，不受 enabled 影响。
-    pub crosshair_key: AtomicU32,
-    /// 按下开关键时置位，由主线程轮询取走——钩子线程里不能直接改 App。
-    pub crosshair_toggle: AtomicBool,
-    /// 开关键是否还按着。用来过滤自动重复，避免连续开关。
-    pub crosshair_key_down: AtomicBool,
 }
 
 impl HookState {
@@ -76,9 +70,6 @@ impl HookState {
             last_event_scan: AtomicU32::new(0),
             total_events: AtomicU64::new(0),
             accept_injected: AtomicBool::new(false),
-            crosshair_key: AtomicU32::new(0),
-            crosshair_toggle: AtomicBool::new(false),
-            crosshair_key_down: AtomicBool::new(false),
         }
     }
 }
@@ -148,22 +139,6 @@ unsafe extern "system" fn hook_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM)
     let mut scan = kb.scanCode;
     if kb.flags & LLKHF_EXTENDED != 0 {
         scan |= EXTENDED_TAG;
-    }
-
-    // 准星开关：在"配置是否启用"之前判断——任何时候按都要响应，
-    // 否则切到桌面或别的窗口时就没法关掉准星了。
-    //
-    // 只认首次按下：按住不放会产生自动重复，不过滤的话会连续开关。
-    {
-        let key = state.crosshair_key.load(Ordering::Relaxed);
-        if key != 0 && scan == key {
-            let was_down = state.crosshair_key_down.swap(is_down, Ordering::Relaxed);
-            if is_down && !was_down {
-                state.crosshair_toggle.store(true, Ordering::Relaxed);
-            }
-            // 按下和松开都吞掉：让这个键彻底不给前台程序。
-            return 1;
-        }
     }
 
     if !state.enabled.load(Ordering::Relaxed) {

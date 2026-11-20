@@ -770,6 +770,29 @@
     text-align: right;
   }
 
+  .ch-axis {
+    font-size: 12px;
+    color: var(--ink-5);
+    flex: none;
+  }
+
+  .ch-field input[type="number"] {
+    font: inherit;
+    font-size: 12.5px;
+    width: 78px;
+    padding: 6px 8px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--md-corner-sm);
+    background: var(--white);
+    color: var(--ink);
+    flex: none;
+  }
+
+  .ch-field input[type="number"]:focus {
+    outline: none;
+    border-color: var(--black);
+  }
+
   /* 开关键按钮 */
   .ch-key {
     min-width: 110px;
@@ -1678,10 +1701,28 @@
         </div>
 
         <div class="ch-row">
-          <label class="ch-label">开关快捷键</label>
+          <label class="ch-label">快捷键</label>
           <div class="ch-field">
             <button class="cap ch-key" id="ch-key" data-side="key">未设置</button>
-            <span class="ch-hint">按下可切换全局准星显示，右键清空</span>
+            <span class="ch-hint">可录键盘键或鼠标左/右/中/侧键，右键清空</span>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">触发方式</label>
+          <div class="ch-field">
+            <div class="ch-style" id="ch-hotkey-mode"></div>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">位置偏移</label>
+          <div class="ch-field">
+            <span class="ch-axis">X</span>
+            <input type="number" class="ch-num" id="ch-offset-x" min="-4000" max="4000" step="1">
+            <span class="ch-axis">Y</span>
+            <input type="number" class="ch-num" id="ch-offset-y" min="-4000" max="4000" step="1">
+            <span class="ch-hint">相对屏幕中心，物理像素</span>
           </div>
         </div>
 
@@ -1780,6 +1821,14 @@ const CH_STYLES = [
 
 // 常用准星色。刻意避开荧光绿/亮粉——那种颜色在某些游戏里
 // 容易和"外挂提示色"混为一谈。
+const HOTKEY_MODES = [
+  { value: "TOGGLE", label: "按一下切换" },
+  { value: "HOLD_TO_HIDE", label: "按住隐藏" },
+  { value: "HOLD_TO_SHOW", label: "按住显示" },
+];
+
+const MOUSE_KEY_NAMES = ["左键", "右键", "中键", "侧键 1", "侧键 2"];
+
 const CH_COLORS = [
   [255, 255, 255],
   [0, 0, 0],
@@ -2096,9 +2145,38 @@ function renderCrosshair() {
   bind("ch-opacity", "opacity", "%");
   bind("ch-outline", "outline", "");
 
+  // 触发方式
+  const modeHost = document.getElementById("ch-hotkey-mode");
+  modeHost.innerHTML = "";
+  HOTKEY_MODES.forEach(o => {
+    const b = document.createElement("button");
+    b.textContent = o.label;
+    b.setAttribute("aria-pressed", o.value === state.hotkeyMode ? "true" : "false");
+    b.onclick = async () => {
+      try {
+        state = await invoke("setHotkeyMode", { mode: o.value });
+        renderCrosshair();
+      } catch (e) { notify(e.message, true, 6000); }
+    };
+    modeHost.appendChild(b);
+  });
+
+  // 位置偏移
+  const bindNum = (id, key) => {
+    const el = document.getElementById(id);
+    if (document.activeElement !== el) el.value = c[key];
+    el.onchange = () => {
+      const v = Math.max(-4000, Math.min(4000, Number(el.value) || 0));
+      el.value = v;
+      pushCrosshair({ [key]: v });
+    };
+  };
+  bindNum("ch-offset-x", "offset_x");
+  bindNum("ch-offset-y", "offset_y");
+
   // 开关键
   const keyBtn = document.getElementById("ch-key");
-  keyBtn.textContent = state.crosshairKey ? keyNameOf(state.crosshairKey) : "未设置";
+  keyBtn.textContent = hotkeyLabel(state.hotkey);
 
   renderCrosshairPreview(c);
 
@@ -2144,10 +2222,18 @@ function renderCrosshairPreview(c) {
      preserveAspectRatio="xMidYMid meet">${shape}</svg>`;
 }
 
-function keyNameOf(scan) {
-  // 后端在 state 里给了 sourceName 的映射，但开关键是独立字段。
-  // 这里只能显示扫描码；要显示名字得再请求一次。
-  return "0x" + scan.toString(16).toUpperCase();
+function hotkeyLabel(hk) {
+  if (!hk) return "未设置";
+  if (hk.kind === "MOUSE") {
+    return MOUSE_KEY_NAMES[hk.code] || ("鼠标键 " + hk.code);
+  }
+  // 键盘键的名字后端没给，显示扫描码。常见的几个补上中文。
+  const KNOWN = { 0x2A: "左 Shift", 0x36: "右 Shift", 0x1D: "左 Ctrl",
+                  0xE01D: "右 Ctrl", 0x38: "左 Alt", 0xE038: "右 Alt",
+                  0x3B: "F1", 0x3C: "F2", 0x3D: "F3", 0x3E: "F4",
+                  0x3F: "F5", 0x40: "F6", 0x41: "F7", 0x42: "F8",
+                  0x43: "F9", 0x44: "F10", 0x57: "F11", 0x58: "F12" };
+  return KNOWN[hk.code] || ("键 0x" + hk.code.toString(16).toUpperCase());
 }
 
 /* =============== 操作 =============== */
@@ -2386,35 +2472,55 @@ function beginKeyCapture() {
   if (chCapturing) return;
   chCapturing = true;
   const btn = document.getElementById("ch-key");
-  btn.textContent = "按下按键";
+  btn.textContent = "按下按键或鼠标";
+
+  const finish = (hotkey) => {
+    cleanup();
+    if (hotkey === undefined) return;
+    invoke("setCrosshairKey", { hotkey })
+      .then(s => { state = s; renderCrosshair(); })
+      .catch(() => notify("这个按键无法用作快捷键", true, 6000));
+  };
 
   const handler = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    cleanup();
-
-    if (e.key === "Escape") return;
-
+    if (e.key === "Escape") { finish(undefined); return; }
     invoke("resolveVirtualKey", { vk: e.keyCode })
-      .then(({ scan }) => invoke("setCrosshairKey", { scan }))
-      .then(s => { state = s; renderCrosshair(); })
-      .catch(() => notify("这个按键无法用作开关", true, 6000));
+      .then(({ scan }) => finish({ kind: "KEYBOARD", code: scan }))
+      .catch(() => finish(undefined));
   };
 
-  const onOutside = (e) => {
-    if (e.target.closest("#ch-key")) return;
-    cleanup();
+  // 鼠标键：左/右/中/侧键。只在捕获状态下拦截，平时完全不影响使用。
+  const onMouse = (e) => {
+    e.preventDefault();
+    // 同元素同阶段的监听器要 stopImmediate 才拦得住 onOutside
+    e.stopImmediatePropagation();
+    const MAP = { 0: 0, 2: 1, 1: 2 };  // MouseEvent.button -> 我们的编号
+    let code = MAP[e.button];
+    if (code === undefined) {
+      // 侧键在浏览器里通常映射到 3/4
+      if (e.button === 3) code = 3;
+      else if (e.button === 4) code = 4;
+      else return;
+    }
+    finish({ kind: "MOUSE", code });
   };
 
   function cleanup() {
     chCapturing = false;
     window.removeEventListener("keydown", handler, true);
-    document.removeEventListener("mousedown", onOutside, true);
+    document.removeEventListener("mousedown", onMouse, true);
+    document.removeEventListener("contextmenu", onMouse, true);
     renderCrosshair();
   }
 
+  // 捕获期间点哪里都算"选了那个鼠标键"，所以不注册"点外面取消"。
+  // 要退出按 Esc。这和映射键位框的行为不同——那里点外面能取消，因为
+  // 捕获的是键盘键；这里鼠标本身就是候选，没法和"点外面"区分。
   window.addEventListener("keydown", handler, true);
-  document.addEventListener("mousedown", onOutside, true);
+  document.addEventListener("mousedown", onMouse, true);
+  document.addEventListener("contextmenu", onMouse, true);
 }
 
 document.getElementById("btn-add-mapping").onclick = async () => {

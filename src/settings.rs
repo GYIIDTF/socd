@@ -140,6 +140,77 @@ impl CrosshairStyle {
     }
 }
 
+/// 快捷键来源：键盘还是鼠标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HotkeyKind {
+    Keyboard,
+    Mouse,
+}
+
+impl HotkeyKind {
+    pub fn as_settings_str(self) -> &'static str {
+        match self {
+            HotkeyKind::Keyboard => "KEYBOARD",
+            HotkeyKind::Mouse => "MOUSE",
+        }
+    }
+    pub fn from_settings_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "KEYBOARD" => Some(HotkeyKind::Keyboard),
+            "MOUSE" => Some(HotkeyKind::Mouse),
+            _ => None,
+        }
+    }
+}
+
+/// 一个快捷键。键盘存扫描码，鼠标存按键位（0=左 1=右 2=中 3/4=侧键）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hotkey {
+    pub kind: HotkeyKind,
+    pub code: u16,
+}
+
+/// 快捷键的触发方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HotkeyMode {
+    /// 按一下切换显示/隐藏
+    Toggle,
+    /// 按住时隐藏，松开恢复
+    HoldToHide,
+    /// 按住时显示，松开隐藏
+    HoldToShow,
+}
+
+impl HotkeyMode {
+    pub fn as_settings_str(self) -> &'static str {
+        match self {
+            HotkeyMode::Toggle => "TOGGLE",
+            HotkeyMode::HoldToHide => "HOLD_TO_HIDE",
+            HotkeyMode::HoldToShow => "HOLD_TO_SHOW",
+        }
+    }
+    pub fn from_settings_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "TOGGLE" => Some(HotkeyMode::Toggle),
+            "HOLD_TO_HIDE" => Some(HotkeyMode::HoldToHide),
+            "HOLD_TO_SHOW" => Some(HotkeyMode::HoldToShow),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            HotkeyMode::Toggle => "按一下切换",
+            HotkeyMode::HoldToHide => "按住时隐藏",
+            HotkeyMode::HoldToShow => "按住时显示",
+        }
+    }
+    pub fn all() -> [HotkeyMode; 3] {
+        [HotkeyMode::Toggle, HotkeyMode::HoldToHide, HotkeyMode::HoldToShow]
+    }
+}
+
 /// 准星设置。挂在 profile 上，跟着前台程序自动切换。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Crosshair {
@@ -157,6 +228,9 @@ pub struct Crosshair {
     pub opacity: u8,
     /// 描边宽度，0 表示不加描边。深色背景上纯色准星容易看不见。
     pub outline: u32,
+    /// 相对显示器中心的偏移，物理像素。正 X 向右，正 Y 向下。
+    pub offset_x: i32,
+    pub offset_y: i32,
 }
 
 impl Default for Crosshair {
@@ -170,6 +244,8 @@ impl Default for Crosshair {
             size: 10,
             opacity: 100,
             outline: 1,
+            offset_x: 0,
+            offset_y: 0,
         }
     }
 }
@@ -202,6 +278,10 @@ pub struct Settings {
     pub profiles: Vec<Profile>,
     /// Index into `profiles` of the profile selected in the UI.
     pub active_profile_index: usize,
+    /// 准星快捷键。全局设置——它控制的是"怎么开关"，不是"显示什么"，
+    /// 所以不跟 profile 走。
+    pub hotkey: Option<Hotkey>,
+    pub hotkey_mode: HotkeyMode,
 }
 
 impl Default for Settings {
@@ -209,6 +289,8 @@ impl Default for Settings {
         Settings {
             profiles: Vec::new(),
             active_profile_index: 0,
+            hotkey: None,
+            hotkey_mode: HotkeyMode::Toggle,
         }
     }
 }
@@ -217,6 +299,8 @@ impl Settings {
     /// Parses the original `settings.socd` text format.
     pub fn parse(text: &str) -> Result<Settings, String> {
         let mut settings = Settings::default();
+        let mut hotkey: Option<Hotkey> = None;
+        let mut hotkey_mode = HotkeyMode::Toggle;
 
         let mut version_ok = false;
         for line in text.lines() {
@@ -246,9 +330,29 @@ impl Settings {
                 continue;
             }
 
-            // 顶层 `key: value` 行（含旧版本遗留的 close_to_tray / runtime_debug）
-            // 一律跳过；只有 PROFILE_START 之后的内容才进入配置模型
-            if line.contains(':') {
+            // 顶层 `key: value` 行。准星快捷键在这里解析，
+            // 其余（含旧版本遗留的 close_to_tray / runtime_debug）跳过。
+            if let Some((k, v)) = line.split_once(':') {
+                let v = v.trim();
+                match k.trim().to_ascii_lowercase().as_str() {
+                    "hotkey" => {
+                        let parts: Vec<&str> = v.split_whitespace().collect();
+                        if parts.len() == 2 {
+                            if let (Some(kind), Ok(code)) = (
+                                HotkeyKind::from_settings_str(parts[0]),
+                                parts[1].parse::<u16>(),
+                            ) {
+                                hotkey = Some(Hotkey { kind, code });
+                            }
+                        }
+                    }
+                    "hotkey_mode" => {
+                        if let Some(m) = HotkeyMode::from_settings_str(v) {
+                            hotkey_mode = m;
+                        }
+                    }
+                    _ => {}
+                }
                 continue;
             }
 
@@ -272,6 +376,23 @@ impl Settings {
                     "program" => profile.program = value.to_string(),
                     // 旧版本遗留字段：Windows 专用程序，忽略
                     "platform" => {}
+                    "hotkey" => {
+                        // 格式：KIND CODE，例如 KEYBOARD 56 或 MOUSE 3
+                        let parts: Vec<&str> = value.split_whitespace().collect();
+                        if parts.len() == 2 {
+                            if let (Some(kind), Ok(code)) = (
+                                HotkeyKind::from_settings_str(parts[0]),
+                                parts[1].parse::<u16>(),
+                            ) {
+                                hotkey = Some(Hotkey { kind, code });
+                            }
+                        }
+                    }
+                    "hotkey_mode" => {
+                        if let Some(m) = HotkeyMode::from_settings_str(value) {
+                            hotkey_mode = m;
+                        }
+                    }
                     // 准星：一个字段一行，逐项覆盖默认值。
                     // 旧配置没有这些行，保留默认值即可。
                     "crosshair" => {
@@ -316,6 +437,16 @@ impl Settings {
                             profile.crosshair.outline = v.min(10);
                         }
                     }
+                    "crosshair_offset_x" => {
+                        if let Ok(v) = value.parse::<i32>() {
+                            profile.crosshair.offset_x = v.clamp(-4000, 4000);
+                        }
+                    }
+                    "crosshair_offset_y" => {
+                        if let Ok(v) = value.parse::<i32>() {
+                            profile.crosshair.offset_y = v.clamp(-4000, 4000);
+                        }
+                    }
                     "mapping" => {
                         // `MODE source_code destination_code`
                         let parts: Vec<&str> = value.split_whitespace().collect();
@@ -343,6 +474,9 @@ impl Settings {
             settings.profiles.push(profile);
         }
 
+        settings.hotkey = hotkey;
+        settings.hotkey_mode = hotkey_mode;
+
         if settings.profiles.is_empty() {
             settings.profiles.push(Profile::new(""));
         }
@@ -359,6 +493,23 @@ impl Settings {
             "[{}] # Config version, do not delete this!!! Actually, you're not supposed to modify this by hand at all! You will regret manually editing this file!\n\n",
             SETTINGS_VERSION
         ));
+
+        // 全局准星快捷键。放在所有 profile 之前——它不属于任何配置，
+        // 控制的是"怎么开关"而不是"显示什么"。
+        if let Some(hk) = self.hotkey {
+            out.push_str(&format!(
+                "hotkey: {} {}\n",
+                hk.kind.as_settings_str(),
+                hk.code
+            ));
+        }
+        if self.hotkey_mode != HotkeyMode::Toggle {
+            out.push_str(&format!(
+                "hotkey_mode: {}\n",
+                self.hotkey_mode.as_settings_str()
+            ));
+        }
+
         for (i, profile) in self.profiles.iter().enumerate() {
             out.push_str("PROFILE_START\n");
             if i == self.active_profile_index {
@@ -377,6 +528,45 @@ impl Settings {
                     m.source,
                     m.destination
                 ));
+            }
+            {
+                let c = &profile.crosshair;
+                let d = Crosshair::default();
+                // 只写和默认值不同的项。准星是后加的功能，旧配置里没有
+                // 这些行，解析时保留默认值即可。
+                if c.enabled != d.enabled {
+                    out.push_str(&format!("crosshair: {}\n", c.enabled));
+                }
+                if c.style != d.style {
+                    out.push_str(&format!("crosshair_style: {}\n", c.style.as_settings_str()));
+                }
+                if c.color != d.color {
+                    out.push_str(&format!(
+                        "crosshair_color: {} {} {}\n",
+                        c.color[0], c.color[1], c.color[2]
+                    ));
+                }
+                if c.thickness != d.thickness {
+                    out.push_str(&format!("crosshair_thickness: {}\n", c.thickness));
+                }
+                if c.gap != d.gap {
+                    out.push_str(&format!("crosshair_gap: {}\n", c.gap));
+                }
+                if c.size != d.size {
+                    out.push_str(&format!("crosshair_size: {}\n", c.size));
+                }
+                if c.opacity != d.opacity {
+                    out.push_str(&format!("crosshair_opacity: {}\n", c.opacity));
+                }
+                if c.outline != d.outline {
+                    out.push_str(&format!("crosshair_outline: {}\n", c.outline));
+                }
+                if c.offset_x != d.offset_x {
+                    out.push_str(&format!("crosshair_offset_x: {}\n", c.offset_x));
+                }
+                if c.offset_y != d.offset_y {
+                    out.push_str(&format!("crosshair_offset_y: {}\n", c.offset_y));
+                }
             }
             out.push_str("PROFILE_END\n");
         }
@@ -488,6 +678,47 @@ mod tests {
         let s = Settings::parse(text).expect("parse");
         assert_eq!(s.profiles.len(), 1);
         assert_eq!(s.profiles[0].program, "");
+    }
+
+    #[test]
+    fn hotkey_roundtrip() {
+        let mut s = Settings::default();
+        s.hotkey = Some(Hotkey { kind: HotkeyKind::Mouse, code: 3 });
+        s.hotkey_mode = HotkeyMode::HoldToHide;
+        let text = s.serialize();
+        let parsed = Settings::parse(&text).expect("parse");
+        assert_eq!(parsed.hotkey, Some(Hotkey { kind: HotkeyKind::Mouse, code: 3 }));
+        assert_eq!(parsed.hotkey_mode, HotkeyMode::HoldToHide);
+    }
+
+    #[test]
+    fn crosshair_offset_roundtrip() {
+        let mut s = Settings::default();
+        let mut p = Profile::new("game.exe");
+        p.crosshair.enabled = true;
+        p.crosshair.offset_x = -120;
+        p.crosshair.offset_y = 45;
+        s.profiles.push(p);
+        let text = s.serialize();
+        let parsed = Settings::parse(&text).expect("parse");
+        assert_eq!(parsed.profiles[0].crosshair.offset_x, -120);
+        assert_eq!(parsed.profiles[0].crosshair.offset_y, 45);
+    }
+
+    #[test]
+    fn old_config_without_crosshair_still_loads() {
+        // 准星是后加的功能，旧配置里没有相关行
+        let text = "[1] # header
+
+PROFILE_START
+program: a.exe
+mapping: OPPOSITE 30 32
+PROFILE_END
+";
+        let s = Settings::parse(text).expect("parse");
+        assert_eq!(s.profiles[0].crosshair, Crosshair::default());
+        assert_eq!(s.hotkey, None);
+        assert_eq!(s.hotkey_mode, HotkeyMode::Toggle);
     }
 
     #[test]

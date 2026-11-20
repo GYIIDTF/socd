@@ -51,8 +51,16 @@ pub struct StateView {
     pub crosshair_available: bool,
     /// 准星总开关
     pub crosshair_armed: bool,
-    /// 开关键的扫描码，0 表示未设置
-    pub crosshair_key: ScanCode,
+    /// 当前快捷键，null 表示未设置
+    pub hotkey: Option<crate::settings::Hotkey>,
+    /// 快捷键触发模式
+    pub hotkey_mode: crate::settings::HotkeyMode,
+    /// 快捷键当前是否按住（按住类模式下由它决定显示）
+    pub hotkey_held: bool,
+    /// Raw Input 是否注册成功
+    pub hotkey_registered: bool,
+    pub raw_input_count: u64,
+    pub raw_event_count: u64,
     pub crosshair_last: String,
 }
 
@@ -123,10 +131,12 @@ pub struct App {
     pub load_error: Option<String>,
     /// 准星叠加层。创建失败时为 None，功能降级但不影响按键映射。
     pub overlay: Option<Arc<crate::crosshair::Overlay>>,
-    /// 准星总开关（用户按开关键切换）。关掉后任何配置的准星都不显示。
+    /// 准星总开关。关掉后任何配置的准星都不显示。
+    ///
+    /// Toggle 模式下由快捷键翻转；按住类模式下由"当前是否按住"派生。
     pub crosshair_armed: bool,
-    /// 准星开关键。全局生效，不受配置启用状态影响。
-    pub crosshair_key: Option<ScanCode>,
+    /// 快捷键当前是否按住。按住类模式靠它决定显示与否。
+    pub hotkey_held: bool,
     /// 最近一次准星渲染的结果，用于界面/诊断
     pub crosshair_last: String,
 }
@@ -171,12 +181,18 @@ impl App {
             load_error,
             overlay: crate::crosshair::Overlay::new(),
             crosshair_armed: true,
-            crosshair_key: None,
+            hotkey_held: false,
             crosshair_last: String::new(),
         };
 
         if app.settings.profiles.is_empty() {
             app.settings.profiles.push(Profile::new(""));
+        }
+
+        // 按已保存的配置注册准星快捷键。不注册的话重启后快捷键失效，
+        // 用户得重新设一次——而他不会想到要这么做。
+        if let (Some(overlay), Some(hk)) = (app.overlay.as_ref(), app.settings.hotkey) {
+            overlay.set_hotkey(Some(hk));
         }
 
         match win::install(app.hook.clone()) {
@@ -225,10 +241,8 @@ impl App {
 
     /// Called on a timer: enables the hook only while the armed program is focused.
     pub fn poll_focus(&mut self) {
-        // 钩子线程只能置位，真正的切换在这里做
-        if self.hook.crosshair_toggle.swap(false, Ordering::Relaxed) {
-            self.crosshair_armed = !self.crosshair_armed;
-        }
+        // 快捷键事件来自准星窗口的 Raw Input 监听
+        self.poll_hotkey();
 
         if self.settings.profiles.is_empty() {
             return;
@@ -269,6 +283,36 @@ impl App {
         };
 
         self.refresh_crosshair(should_enable);
+    }
+
+    /// 处理准星快捷键事件，按模式更新显示状态。
+    fn poll_hotkey(&mut self) {
+        let Some(overlay) = self.overlay.clone() else { return };
+        let events = overlay.drain_hotkey_events();
+        if events.is_empty() {
+            return;
+        }
+
+        let mode = self.settings.hotkey_mode;
+        for ev in events {
+            self.hotkey_held = ev.down;
+            match mode {
+                crate::settings::HotkeyMode::Toggle => {
+                    // 只在按下时翻转，松开不动
+                    if ev.down {
+                        self.crosshair_armed = !self.crosshair_armed;
+                    }
+                }
+                crate::settings::HotkeyMode::HoldToHide => {
+                    // 按住 -> 隐藏；松开 -> 显示
+                    self.crosshair_armed = !ev.down;
+                }
+                crate::settings::HotkeyMode::HoldToShow => {
+                    self.crosshair_armed = ev.down;
+                }
+            }
+        }
+        self.refresh_now();
     }
 
     /// 按当前状态决定准星是否显示、显示成什么样。
@@ -415,7 +459,18 @@ impl App {
             modes: mode_options(),
             crosshair_available: self.overlay.is_some(),
             crosshair_armed: self.crosshair_armed,
-            crosshair_key: self.hook.crosshair_key.load(Ordering::Relaxed),
+            hotkey: self.settings.hotkey,
+            hotkey_mode: self.settings.hotkey_mode,
+            hotkey_held: self.hotkey_held,
+            hotkey_registered: self
+                .overlay
+                .as_ref()
+                .map(|o| o.raw_registered())
+                .unwrap_or(false),
+            raw_input_count: self.overlay.as_ref()
+                .map(|o| o.raw.input_count.load(Ordering::Relaxed)).unwrap_or(0),
+            raw_event_count: self.overlay.as_ref()
+                .map(|o| o.raw.event_count.load(Ordering::Relaxed)).unwrap_or(0),
             crosshair_last: self.crosshair_last.clone(),
         }
     }
@@ -770,6 +825,12 @@ impl App {
                 if let Some(v) = payload_cfg.get("outline").and_then(Value::as_u64) {
                     c.outline = (v as u32).min(10);
                 }
+                if let Some(v) = payload_cfg.get("offset_x").and_then(Value::as_i64) {
+                    c.offset_x = (v as i32).clamp(-4000, 4000);
+                }
+                if let Some(v) = payload_cfg.get("offset_y").and_then(Value::as_i64) {
+                    c.offset_y = (v as i32).clamp(-4000, 4000);
+                }
 
                 {
                     let profile = self.active_profile_mut()?;
@@ -782,10 +843,48 @@ impl App {
             }
 
             "setCrosshairKey" => {
-                // scan = 0 表示取消开关键
-                let scan = payload.get("scan").and_then(Value::as_u64).unwrap_or(0) as ScanCode;
-                self.hook.crosshair_key.store(scan, Ordering::Relaxed);
-                self.crosshair_key = if scan == 0 { None } else { Some(scan) };
+                // kind = "KEYBOARD" | "MOUSE"，code = 扫描码或鼠标键位。
+                // 传 null 表示清空快捷键。
+                let hk = match payload.get("hotkey") {
+                    Some(v) if !v.is_null() => {
+                        let kind = v
+                            .get("kind")
+                            .and_then(Value::as_str)
+                            .and_then(crate::settings::HotkeyKind::from_settings_str)
+                            .ok_or("bad hotkey kind")?;
+                        let code = v.get("code").and_then(Value::as_u64).ok_or("bad hotkey code")? as u16;
+                        Some(crate::settings::Hotkey { kind, code })
+                    }
+                    _ => None,
+                };
+
+                self.settings.hotkey = hk;
+                if let Some(overlay) = self.overlay.as_ref() {
+                    overlay.set_hotkey(hk);
+                }
+                self.save()?;
+                // 换了快捷键，按住状态从零开始
+                self.hotkey_held = false;
+                Ok(self.state()?)
+            }
+
+            "setHotkeyMode" => {
+                let mode = payload
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .and_then(crate::settings::HotkeyMode::from_settings_str)
+                    .ok_or("bad hotkey mode")?;
+                self.settings.hotkey_mode = mode;
+                // 切模式时按新语义重置显示状态：
+                // 按住类从"没按住"开始，Toggle 保持当前值。
+                self.hotkey_held = false;
+                if mode == crate::settings::HotkeyMode::HoldToShow {
+                    self.crosshair_armed = false;
+                } else if mode == crate::settings::HotkeyMode::HoldToHide {
+                    self.crosshair_armed = true;
+                }
+                self.save()?;
+                self.refresh_now();
                 Ok(self.state()?)
             }
 

@@ -8,6 +8,7 @@ mod app;
 mod crosshair;
 mod logging;
 mod paths;
+mod rawinput;
 mod server;
 mod single_instance;
 mod settings;
@@ -27,6 +28,10 @@ use app::{App, FocusPoller};
 const APP_ICON_PNG: &[u8] = include_bytes!("../assets/icon-256.png");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 必须在任何窗口创建之前声明 DPI 感知，否则多显示器不同缩放时
+    // 拿到的坐标是虚拟化的，准星会偏。
+    crosshair::enable_per_monitor_dpi();
+
     logging::startup();
 
     // 旧版本把界面地址写在 Data/ui-url.txt；现在改走共享内存，顺手清掉残留。

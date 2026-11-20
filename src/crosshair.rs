@@ -27,6 +27,54 @@ use crate::settings::{Crosshair, CrosshairStyle};
 
 const CLASS_NAME: &str = "SOCDCrosshairOverlay";
 
+/// 声明进程为 per-monitor-v2 DPI 感知。
+///
+/// 不声明的话，系统会把 `GetCursorPos` / `GetClientRect` 的返回值
+/// 按主屏缩放虚拟化——多显示器不同缩放比例时，准星位置会偏。
+/// 必须在创建任何窗口之前调用。
+pub fn enable_per_monitor_dpi() {
+    use windows_sys::Win32::UI::HiDpi::{
+        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
+    unsafe {
+        // Win10 1703+ 才有；失败说明系统更旧，保持默认即可
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+}
+
+/// 当前显示器的缩放比例（1.0 = 96 DPI）。
+///
+/// `MonitorFromPoint` + `GetDpiForMonitor` 拿到的是该显示器自己的 DPI，
+/// 不是主屏的——这是"鼠标在哪块屏就按哪块的缩放"的关键。
+pub fn scale_for_monitor(point: POINT) -> f32 {
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows_sys::Win32::UI::HiDpi::GetDpiForMonitor;
+    use windows_sys::Win32::UI::HiDpi::MDT_EFFECTIVE_DPI;
+
+    unsafe {
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        if monitor.is_null() {
+            return 1.0;
+        }
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(monitor, &mut info) == 0 {
+            return 1.0;
+        }
+
+        let mut dpi_x: u32 = 96;
+        let mut dpi_y: u32 = 96;
+        if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) != 0 {
+            return 1.0;
+        }
+        // 进程已是 per-monitor-v2 感知时这个值就是真实 DPI；
+        // 无论如何都按它算比例，避免"主屏 100%、副屏 150%"时错位。
+        dpi_x as f32 / 96.0
+    }
+}
+
 /// 渲染出来的位图：BGRA + 预乘 Alpha，`UpdateLayeredWindow` 要这个格式。
 struct Surface {
     hdc: HDC,
@@ -136,7 +184,13 @@ pub struct Overlay {
     hwnd: HWND,
     surface: Mutex<Option<Surface>>,
     visible: AtomicBool,
+    /// Raw Input 快捷键监听
+    pub raw: crate::rawinput::RawInputState,
 }
+
+/// 窗口过程需要拿到 Overlay 才能处理 WM_INPUT。
+/// 用全局登记：一个进程只会有这一个准星窗口。
+static OVERLAY_RAW: Mutex<Option<Arc<Overlay>>> = Mutex::new(None);
 
 unsafe impl Send for Overlay {}
 unsafe impl Sync for Overlay {}
@@ -181,11 +235,16 @@ impl Overlay {
                 return None;
             }
 
-            Some(Arc::new(Overlay {
+            let overlay = Arc::new(Overlay {
                 hwnd,
                 surface: Mutex::new(None),
                 visible: AtomicBool::new(false),
-            }))
+                raw: crate::rawinput::RawInputState::default(),
+            });
+            if let Ok(mut slot) = OVERLAY_RAW.lock() {
+                *slot = Some(overlay.clone());
+            }
+            Some(overlay)
         }
     }
 
@@ -225,9 +284,18 @@ impl Overlay {
 
         draw(surface, cfg);
 
-        // 准星放在窗口（或屏幕）正中
-        let cx = left + width / 2 - canvas / 2;
-        let cy = top + height / 2 - canvas / 2;
+        // 准星放在窗口（或屏幕）正中，再加上用户设定的物理像素偏移。
+        //
+        // 偏移量按"物理像素"定义，但窗口坐标是逻辑像素（DPI 缩放后）。
+        // 除以缩放比例才是屏幕上的真实位移——150% 缩放下偏移 100px
+        // 应该是 100 物理像素，不是 100 逻辑像素（那会是 150 物理像素）。
+        let center = POINT { x: left + width / 2, y: top + height / 2 };
+        let scale = scale_for_monitor(center).max(0.5);
+        let ox = (cfg.offset_x as f32 / scale).round() as i32;
+        let oy = (cfg.offset_y as f32 / scale).round() as i32;
+
+        let cx = center.x - canvas / 2 + ox;
+        let cy = center.y - canvas / 2 + oy;
 
         let size = SIZE { cx: canvas, cy: canvas };
         let src = POINT { x: 0, y: 0 };
@@ -271,6 +339,21 @@ impl Overlay {
         }
     }
 
+    /// 按新的快捷键重新注册 Raw Input 设备。
+    pub fn set_hotkey(&self, hotkey: Option<crate::settings::Hotkey>) {
+        crate::rawinput::reconfigure(self.hwnd, &self.raw, hotkey);
+    }
+
+    /// Raw Input 是否注册成功（诊断用）。
+    pub fn raw_registered(&self) -> bool {
+        self.raw.last_ok.load(Ordering::Relaxed)
+    }
+
+    /// 取走待处理的开关键事件。
+    pub fn drain_hotkey_events(&self) -> Vec<crate::rawinput::KeyEvent> {
+        crate::rawinput::drain(&self.raw)
+    }
+
     pub fn is_window(&self) -> bool {
         unsafe { !self.hwnd.is_null() && IsWindow(self.hwnd) != 0 }
     }
@@ -292,6 +375,16 @@ unsafe extern "system" fn wnd_proc(
     wparam: usize,
     lparam: isize,
 ) -> isize {
+    if msg == crate::rawinput::wm_input() {
+        // 只在 Raw Input 线程自己的窗口过程里解析，避免锁竞争
+        if let Ok(slot) = OVERLAY_RAW.lock() {
+            if let Some(overlay) = slot.as_ref() {
+                crate::rawinput::handle_wm_input(lparam, &overlay.raw);
+            }
+        }
+        // 返回 0 是 WM_INPUT 的约定
+        return 0;
+    }
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
