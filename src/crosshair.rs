@@ -467,11 +467,13 @@ fn draw(surface: &mut Surface, cfg: &Crosshair) {
                         CrosshairStyle::Dot => distance <= dot_radius + pad,
                         CrosshairStyle::Ring => (distance - r).abs() <= hw,
                         CrosshairStyle::TShape => {
-                            // 和大写 T 一致：竖线从顶端贯到中心，横线横跨两侧，
-                            // 三段等长。中心不留空——T 本来就是连着的。
-                            let arm = g + r;
-                            (dx <= hw && py <= 0.0 && py >= -arm)
-                                || (dy <= hw && dx <= arm)
+                            // FPS 里的 T 形：去掉十字上方那一截，只留左右和下方。
+                            //
+                            // 上方留白是为了不挡住敌人头部——预瞄时会下意识把
+                            // 准星往上抬，更容易压到爆头线。中心仍留空隙，
+                            // 控枪时还能找到中心点。
+                            (dx <= hw && py >= g && py <= g + r)
+                                || (dy <= hw && dx >= g && dx <= g + r)
                         }
                     };
                     if inside {

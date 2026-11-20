@@ -2338,11 +2338,11 @@ function renderCrosshairPreview(c) {
       out += line(cx - startOff, cy, cx - endOff, cy, th, color, alpha);
       out += line(cx + startOff, cy, cx + endOff, cy, th, color, alpha);
     } else if (c.style === "T_SHAPE") {
-      // 和大写 T 一致：竖线从顶端贯到中心，横线横跨两侧，连在一起。
-      // 这里不能用 startOff，否则中间会有空隙，和实际渲染对不上。
-      const arm = startOff + halfLen + pad;
-      out += line(cx, cy, cx, cy - arm, th, color, alpha);
-      out += line(cx - arm, cy, cx + arm, cy, th, color, alpha);
+      // FPS 的 T 形：去掉上方那一截，只留左右和下方。
+      // 上方留白是为了不挡住敌人头部。
+      out += line(cx, cy + startOff, cx, cy + endOff, th, color, alpha);
+      out += line(cx - startOff, cy, cx - endOff, cy, th, color, alpha);
+      out += line(cx + startOff, cy, cx + endOff, cy, th, color, alpha);
     } else if (c.style === "RING") {
       out += `<circle cx="${cx}" cy="${cy}" r="${halfLen + pad}" fill="none" `
            + `stroke="${color}" stroke-width="${th}" opacity="${alpha}"/>`;
