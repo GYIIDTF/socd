@@ -2176,10 +2176,50 @@ function renderCrosshair() {
 
   // 开关键
   const keyBtn = document.getElementById("ch-key");
-  keyBtn.textContent = hotkeyLabel(state.hotkey);
+  keyBtn.textContent = state.hotkeyName || "未设置";
 
   renderCrosshairPreview(c);
 
+}
+
+// 准星颜色/形状的本地预览，和实际渲染保持同一套参数
+function renderCrosshairPreview(c) {
+  const host = document.getElementById("ch-preview");
+  const col = `rgb(${c.color[0]},${c.color[1]},${c.color[2]})`;
+  const t = c.thickness, g = c.gap, sz = c.size, o = c.outline;
+  const op = c.opacity / 100;
+  const span = (g + sz + o) * 2 + 4;
+  const cx = span / 2, cy = span / 2;
+
+  let shape = "";
+  const line = (x1, y1, x2, y2, w, color, alpha) =>
+    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${w}" opacity="${alpha}"/>`;
+
+  const drawOne = (color, alpha, extra) => {
+    const th = t + extra;
+    let out = "";
+    if (c.style === "CROSS") {
+      out += line(cx, cy - g - sz - extra, cx, cy - g, th, color, alpha);
+      out += line(cx, cy + g, cx, cy + g + sz + extra, th, color, alpha);
+      out += line(cx - g - sz - extra, cy, cx - g, cy, th, color, alpha);
+      out += line(cx + g, cy, cx + g + sz + extra, cy, th, color, alpha);
+    } else if (c.style === "TSHAPE") {
+      out += line(cx, cy - g - sz - extra, cx, cy - g, th, color, alpha);
+      out += line(cx - g - sz - extra, cy, cx - g, cy, th, color, alpha);
+      out += line(cx + g, cy, cx + g + sz + extra, cy, th, color, alpha);
+    } else if (c.style === "RING") {
+      out += `<circle cx="${cx}" cy="${cy}" r="${sz}" fill="none" stroke="${color}" stroke-width="${th}" opacity="${alpha}"/>`;
+    } else {
+      out += `<circle cx="${cx}" cy="${cy}" r="${th / 2 + extra / 2}" fill="${color}" opacity="${alpha}"/>`;
+    }
+    return out;
+  };
+
+  if (o > 0) shape += drawOne("#000", op * 0.7, o);
+  shape += drawOne(col, op, 0);
+
+  host.innerHTML = `<svg width="100%" height="100%" viewBox="0 0 ${span} ${span}"
+     preserveAspectRatio="xMidYMid meet">${shape}</svg>`;
 }
 
 // 准星颜色/形状的本地预览，和实际渲染保持同一套参数
@@ -2461,8 +2501,11 @@ document.getElementById("ch-enabled").onclick = () => {
 // 开关键捕获：和映射键位框用同一套思路
 document.getElementById("ch-key").onclick = () => beginKeyCapture();
 document.getElementById("ch-key").oncontextmenu = (e) => {
+  // 捕获中按右键是要"录成鼠标右键"，不是清空
+  if (chCapturing) return;
   e.preventDefault();
-  invoke("setCrosshairKey", { scan: 0 }).then(s => { state = s; renderCrosshair(); })
+  invoke("setCrosshairKey", { hotkey: null })
+    .then(s => { state = s; renderCrosshair(); })
     .catch(err => notify(err.message, true, 6000));
 };
 

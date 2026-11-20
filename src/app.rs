@@ -57,6 +57,8 @@ pub struct StateView {
     pub hotkey_mode: crate::settings::HotkeyMode,
     /// 快捷键当前是否按住（按住类模式下由它决定显示）
     pub hotkey_held: bool,
+    /// 快捷键的显示名，由后端统一生成，避免前后端两套命名
+    pub hotkey_name: Option<String>,
     /// Raw Input 是否注册成功
     pub hotkey_registered: bool,
     pub raw_input_count: u64,
@@ -70,6 +72,18 @@ pub struct ModeOption {
     pub value: String,
     pub label: String,
     pub hint: String,
+}
+
+/// 鼠标键的中文名。编号约定见 `rawinput` 模块。
+fn mouse_key_name(code: u16) -> &'static str {
+    match code {
+        0 => "鼠标左键",
+        1 => "鼠标右键",
+        2 => "鼠标中键",
+        3 => "鼠标侧键 1",
+        4 => "鼠标侧键 2",
+        _ => "鼠标键",
+    }
 }
 
 fn mode_options() -> Vec<ModeOption> {
@@ -233,6 +247,16 @@ impl App {
         }
         self.hook.generation.fetch_add(1, Ordering::Relaxed);
 
+        // 快捷键控制的"总开关"跟着当前配置的启用状态走。
+        // 两个状态不同步的话，用户切到另一个配置后按快捷键，
+        // 第一次按下看不出变化（净值相同），会以为快捷键坏了。
+        self.crosshair_armed = self
+            .settings
+            .profiles
+            .get(idx)
+            .map(|p| p.crosshair.enabled)
+            .unwrap_or(false);
+
         // 立刻按当前前台判断是否生效，而不是先假定"启用"等下一次轮询纠正。
         // 否则选中某个程序的配置时，界面会短暂显示"对 X 生效中"——
         // 即便 X 根本不在前台。
@@ -293,24 +317,45 @@ impl App {
             return;
         }
 
+        // 快捷键控制的就是"启用"这个状态本身——不是另一个独立开关。
+        // 之前 crosshair_armed 和跨配置的 enabled 是两套状态，用户看到
+        // 界面开着却不显示、或者反过来，很困惑。
+        //
+        // 按住类模式需要记住"按住前的值"，松开时恢复；否则 HoldToShow
+        // 松开后会把用户原本开着的准星关掉。
         let mode = self.settings.hotkey_mode;
+        let mut changed = false;
         for ev in events {
             self.hotkey_held = ev.down;
-            match mode {
+            let want = match mode {
                 crate::settings::HotkeyMode::Toggle => {
-                    // 只在按下时翻转，松开不动
                     if ev.down {
-                        self.crosshair_armed = !self.crosshair_armed;
+                        Some(!self.crosshair_armed)
+                    } else {
+                        None
                     }
                 }
-                crate::settings::HotkeyMode::HoldToHide => {
-                    // 按住 -> 隐藏；松开 -> 显示
-                    self.crosshair_armed = !ev.down;
-                }
-                crate::settings::HotkeyMode::HoldToShow => {
-                    self.crosshair_armed = ev.down;
+                crate::settings::HotkeyMode::HoldToHide => Some(!ev.down),
+                crate::settings::HotkeyMode::HoldToShow => Some(ev.down),
+            };
+            if let Some(v) = want {
+                if v != self.crosshair_armed {
+                    self.crosshair_armed = v;
+                    changed = true;
                 }
             }
+        }
+
+        // 把状态同步进当前配置，界面上的"启用"开关跟着变
+        if changed {
+            let idx = self
+                .settings
+                .active_profile_index
+                .min(self.settings.profiles.len().saturating_sub(1));
+            if let Some(p) = self.settings.profiles.get_mut(idx) {
+                p.crosshair.enabled = self.crosshair_armed;
+            }
+            let _ = self.save();
         }
         self.refresh_now();
     }
@@ -459,6 +504,10 @@ impl App {
             modes: mode_options(),
             crosshair_available: self.overlay.is_some(),
             crosshair_armed: self.crosshair_armed,
+            hotkey_name: self.settings.hotkey.map(|h| match h.kind {
+                crate::settings::HotkeyKind::Keyboard => win::key_name(h.code as u32),
+                crate::settings::HotkeyKind::Mouse => mouse_key_name(h.code).to_string(),
+            }),
             hotkey: self.settings.hotkey,
             hotkey_mode: self.settings.hotkey_mode,
             hotkey_held: self.hotkey_held,
@@ -837,6 +886,10 @@ impl App {
                     profile.crosshair = c;
                 }
                 let _ = idx;
+                // 界面上的启用开关和快捷键控制的"总开关"是同一个状态，
+                // 用户在这里拨开关时 high 层状态必须同步，否则接着按
+                // 快捷键第一次会看不出变化（两边净值相同）。
+                self.crosshair_armed = c.enabled;
                 self.save()?;
                 self.refresh_now();
                 Ok(self.state()?)
