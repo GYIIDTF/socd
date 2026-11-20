@@ -2535,26 +2535,34 @@ function beginKeyCapture() {
   };
 
   // 鼠标键：左/右/中/侧键。只在捕获状态下拦截，平时完全不影响使用。
+  //
+  // 只监听 mousedown：右键在 mousedown 阶段就能识别（button === 2）。
+  // 同时注册 contextmenu 会出问题——右键先触发 mousedown，处理完就
+  // cleanup 了，随后到达 ch-key 的 contextmenu 看到的 chCapturing 已经
+  // 是 false，于是走了"清空快捷键"分支。stopImmediatePropagation 只能
+  // 拦同一个事件，拦不住另一个。
   const onMouse = (e) => {
     e.preventDefault();
-    // 同元素同阶段的监听器要 stopImmediate 才拦得住 onOutside
     e.stopImmediatePropagation();
-    const MAP = { 0: 0, 2: 1, 1: 2 };  // MouseEvent.button -> 我们的编号
-    let code = MAP[e.button];
-    if (code === undefined) {
-      // 侧键在浏览器里通常映射到 3/4
-      if (e.button === 3) code = 3;
-      else if (e.button === 4) code = 4;
-      else return;
-    }
+    // MouseEvent.button: 0=左 1=中 2=右 3=侧键1 4=侧键2
+    // 我们的编号:        0=左 1=右 2=中 3=侧键1 4=侧键2
+    const MAP = { 0: 0, 1: 2, 2: 1, 3: 3, 4: 4 };
+    const code = MAP[e.button];
+    if (code === undefined) return;
     finish({ kind: "MOUSE", code });
+  };
+
+  // 捕获期间屏蔽右键菜单，否则录右键时会弹出浏览器菜单
+  const onContext = (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
   };
 
   function cleanup() {
     chCapturing = false;
     window.removeEventListener("keydown", handler, true);
     document.removeEventListener("mousedown", onMouse, true);
-    document.removeEventListener("contextmenu", onMouse, true);
+    document.removeEventListener("contextmenu", onContext, true);
     renderCrosshair();
   }
 
@@ -2563,7 +2571,7 @@ function beginKeyCapture() {
   // 捕获的是键盘键；这里鼠标本身就是候选，没法和"点外面"区分。
   window.addEventListener("keydown", handler, true);
   document.addEventListener("mousedown", onMouse, true);
-  document.addEventListener("contextmenu", onMouse, true);
+  document.addEventListener("contextmenu", onContext, true);
 }
 
 document.getElementById("btn-add-mapping").onclick = async () => {
