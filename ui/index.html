@@ -1683,16 +1683,6 @@
 
       <div class="crosshair-panel" id="crosshair-panel" hidden>
         <div class="ch-row">
-          <label class="ch-label">启用</label>
-          <div class="ch-field">
-            <button class="switch" id="ch-enabled" role="switch" aria-checked="false">
-              <span class="knob"></span>
-            </button>
-            <span class="ch-hint" id="ch-enabled-hint">该配置在前台时显示准星</span>
-          </div>
-        </div>
-
-        <div class="ch-row">
           <label class="ch-label">样式</label>
           <div class="ch-field">
             <div class="ch-style" id="ch-style"></div>
@@ -1747,6 +1737,18 @@
         </div>
 
         <div class="ch-row">
+          <label class="ch-label">启用快捷键</label>
+          <div class="ch-field">
+            <button class="cap ch-key" id="ch-enable-key" data-side="key">未设置</button>
+            <button class="ch-clear" id="ch-enable-key-clear" title="清除快捷键" aria-label="清除快捷键">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            <span class="ch-hint">准星功能的总开关，会保存</span>
+          </div>
+        </div>
+
+        <div class="ch-row">
           <label class="ch-label">显示快捷键</label>
           <div class="ch-field">
             <button class="cap ch-key" id="ch-key" data-side="key">未设置</button>
@@ -1754,7 +1756,7 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                    stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
             </button>
-            <span class="ch-hint">「一直显示」模式下不需要快捷键</span>
+            <span class="ch-hint">总开关打开时，用它控制显不显示</span>
           </div>
         </div>
 
@@ -2150,11 +2152,6 @@ function renderCrosshair() {
   const c = chConfig();
   if (!c) return;
 
-  // 启用开关
-  const sw = document.getElementById("ch-enabled");
-  sw.setAttribute("aria-checked", c.enabled ? "true" : "false");
-
-
   // 样式
   const styleHost = document.getElementById("ch-style");
   styleHost.innerHTML = "";
@@ -2225,16 +2222,22 @@ function renderCrosshair() {
   bindNum("ch-offset-x", "offset_x");
   bindNum("ch-offset-y", "offset_y");
 
-  // 快捷键按钮显示当前键
-  const keyBtnEl = document.getElementById("ch-key");
-  const keyClearEl = document.getElementById("ch-key-clear");
-  keyBtnEl.textContent = state.hotkeyName || "未设置";
+  // 两个快捷键按钮各显示自己的键
+  const showBtn = document.getElementById("ch-key");
+  const showClear = document.getElementById("ch-key-clear");
+  const enableBtn = document.getElementById("ch-enable-key");
+  const enableClear = document.getElementById("ch-enable-key-clear");
 
-  // 「一直显示」不用快捷键，把它置灰——留着可点会让人以为还要配
+  showBtn.textContent = state.hotkeyName || "未设置";
+  enableBtn.textContent = state.enableHotkeyName || "未设置";
+  showClear.disabled = !state.hotkey;
+  enableClear.disabled = !state.enableHotkey;
+
+  // 「一直显示」时显示快捷键用不上，置灰——留着可点会让人以为还要配
   const always = state.hotkeyMode === "ALWAYS";
-  keyBtnEl.disabled = always;
-  keyClearEl.disabled = always || !state.hotkey;
-  keyBtnEl.classList.toggle("muted", always);
+  showBtn.disabled = always;
+  showClear.disabled = always || !state.hotkey;
+  showBtn.classList.toggle("muted", always);
 
   renderCrosshairPreview(c);
 
@@ -2550,33 +2553,35 @@ search.onkeydown = (e) => {
 
 /* ---- 准星面板事件 ---- */
 
-document.getElementById("ch-enabled").onclick = () => {
-  const c = chConfig();
-  if (!c) return;
-  pushCrosshair({ enabled: !c.enabled });
+// 两个快捷键：显示开关（hotkey）、启用开关（enableHotkey）。
+// 清空靠旁边的 × 按钮，不用右键——右键要留给"录成鼠标右键"。
+const HOTKEY_SLOTS = {
+  show:   { btn: "ch-key",        clear: "ch-key-clear",        field: "hotkey" },
+  enable: { btn: "ch-enable-key", clear: "ch-enable-key-clear", field: "enableHotkey" },
 };
 
-// 开关键捕获：和映射键位框用同一套思路
-// 快捷键捕获。清空靠旁边的 × 按钮，不用右键——右键要留给"录成鼠标右键"。
-document.getElementById("ch-key").onclick = () => beginKeyCapture();
-document.getElementById("ch-key-clear").onclick = () => {
-  invoke("setCrosshairKey", { hotkey: null })
-    .then(s => { state = s; renderCrosshair(); })
-    .catch(err => notify(err.message, true, 6000));
-};
+Object.entries(HOTKEY_SLOTS).forEach(([slot, cfg]) => {
+  document.getElementById(cfg.btn).onclick = () => beginKeyCapture(slot);
+  document.getElementById(cfg.clear).onclick = () => {
+    invoke("setCrosshairKey", { [cfg.field]: null })
+      .then(s => { state = s; renderCrosshair(); })
+      .catch(err => notify(err.message, true, 6000));
+  };
+});
 
-let chCapturing = false;
+let chCapturing = null;
 
-function beginKeyCapture() {
+function beginKeyCapture(slot) {
   if (chCapturing) return;
-  chCapturing = true;
-  const btn = document.getElementById("ch-key");
+  chCapturing = slot;
+  const cfg = HOTKEY_SLOTS[slot];
+  const btn = document.getElementById(cfg.btn);
   btn.textContent = "按下按键或鼠标";
 
   const finish = (hotkey) => {
     cleanup();
     if (hotkey === undefined) return;
-    invoke("setCrosshairKey", { hotkey })
+    invoke("setCrosshairKey", { [cfg.field]: hotkey })
       .then(s => { state = s; renderCrosshair(); })
       .catch(() => notify("这个按键无法用作快捷键", true, 6000));
   };
@@ -2610,7 +2615,7 @@ function beginKeyCapture() {
   };
 
   function cleanup() {
-    chCapturing = false;
+    chCapturing = null;
     window.removeEventListener("keydown", handler, true);
     document.removeEventListener("mousedown", onMouse, true);
     document.removeEventListener("contextmenu", onContext, true);

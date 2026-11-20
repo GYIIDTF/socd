@@ -291,6 +291,8 @@ pub struct Settings {
     /// 准星快捷键。全局设置——它控制的是"怎么开关"，不是"显示什么"，
     /// 所以不跟 profile 走。
     pub hotkey: Option<Hotkey>,
+    /// 切换"启用"的快捷键。和 hotkey（显示开关）是两个独立的键。
+    pub enable_hotkey: Option<Hotkey>,
     pub hotkey_mode: HotkeyMode,
 }
 
@@ -300,6 +302,7 @@ impl Default for Settings {
             profiles: Vec::new(),
             active_profile_index: 0,
             hotkey: None,
+            enable_hotkey: None,
             hotkey_mode: HotkeyMode::Toggle,
         }
     }
@@ -310,6 +313,7 @@ impl Settings {
     pub fn parse(text: &str) -> Result<Settings, String> {
         let mut settings = Settings::default();
         let mut hotkey: Option<Hotkey> = None;
+        let mut enable_hotkey: Option<Hotkey> = None;
         let mut hotkey_mode = HotkeyMode::Toggle;
 
         let mut version_ok = false;
@@ -356,6 +360,17 @@ impl Settings {
                             }
                         }
                     }
+                    "enable_hotkey" => {
+                        let parts: Vec<&str> = v.split_whitespace().collect();
+                        if parts.len() == 2 {
+                            if let (Some(kind), Ok(code)) = (
+                                HotkeyKind::from_settings_str(parts[0]),
+                                parts[1].parse::<u16>(),
+                            ) {
+                                enable_hotkey = Some(Hotkey { kind, code });
+                            }
+                        }
+                    }
                     "hotkey_mode" => {
                         if let Some(m) = HotkeyMode::from_settings_str(v) {
                             hotkey_mode = m;
@@ -386,23 +401,6 @@ impl Settings {
                     "program" => profile.program = value.to_string(),
                     // 旧版本遗留字段：Windows 专用程序，忽略
                     "platform" => {}
-                    "hotkey" => {
-                        // 格式：KIND CODE，例如 KEYBOARD 56 或 MOUSE 3
-                        let parts: Vec<&str> = value.split_whitespace().collect();
-                        if parts.len() == 2 {
-                            if let (Some(kind), Ok(code)) = (
-                                HotkeyKind::from_settings_str(parts[0]),
-                                parts[1].parse::<u16>(),
-                            ) {
-                                hotkey = Some(Hotkey { kind, code });
-                            }
-                        }
-                    }
-                    "hotkey_mode" => {
-                        if let Some(m) = HotkeyMode::from_settings_str(value) {
-                            hotkey_mode = m;
-                        }
-                    }
                     // 准星：一个字段一行，逐项覆盖默认值。
                     // 旧配置没有这些行，保留默认值即可。
                     "crosshair" => {
@@ -485,6 +483,7 @@ impl Settings {
         }
 
         settings.hotkey = hotkey;
+        settings.enable_hotkey = enable_hotkey;
         settings.hotkey_mode = hotkey_mode;
 
         if settings.profiles.is_empty() {
@@ -509,6 +508,14 @@ impl Settings {
         if let Some(hk) = self.hotkey {
             out.push_str(&format!(
                 "hotkey: {} {}\n",
+                hk.kind.as_settings_str(),
+                hk.code
+            ));
+        }
+        if let Some(hk) = self.enable_hotkey {
+            out.push_str(&format!(
+                "enable_hotkey: {} {}
+",
                 hk.kind.as_settings_str(),
                 hk.code
             ));

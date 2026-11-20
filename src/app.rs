@@ -59,6 +59,8 @@ pub struct StateView {
     pub hotkey_held: bool,
     /// 快捷键的显示名，由后端统一生成，避免前后端两套命名
     pub hotkey_name: Option<String>,
+    pub enable_hotkey: Option<crate::settings::Hotkey>,
+    pub enable_hotkey_name: Option<String>,
     /// Raw Input 是否注册成功
     pub hotkey_registered: bool,
     pub raw_input_count: u64,
@@ -206,7 +208,7 @@ impl App {
         // 按已保存的配置注册准星快捷键。不注册的话重启后快捷键失效，
         // 用户得重新设一次——而他不会想到要这么做。
         if let (Some(overlay), Some(hk)) = (app.overlay.as_ref(), app.settings.hotkey) {
-            overlay.set_hotkey(Some(hk));
+            overlay.set_hotkey(Some(hk), app.settings.enable_hotkey);
         }
 
         match win::install(app.hook.clone()) {
@@ -308,31 +310,52 @@ impl App {
         }
 
         // 两个快捷键各管一摊：
-        //   Show   —— 准星是否显示（临时开关，不动配置）
-        //   Enable —— 当前配置的启用状态（会写盘）
         //
-        // 分开的好处是用户可以在界面里把准星设好但不启用，
-        // 进游戏按 Show 快捷键临时打开，退出再按一下关掉，不必回界面。
+        //   Enable —— 准星功能的总闸。翻的是配置里的 enabled，写盘，
+        //             重启后保持。典型用法：打战术据枪时打开（游戏不画
+        //             准星），普通开镜时关掉（游戏自己有，别叠加）。
+        //
+        //   Show   —— 总闸打开时的显示控制。不写盘，只在本次运行内有效。
+        //             配合"按住显示"，可以用右键开镜时临时显示准星。
         let mode = self.settings.hotkey_mode;
+        let mut enable_dirty = false;
         for ev in events {
-            self.hotkey_held = ev.down;
-            match mode {
-                // 「一直显示」不响应快捷键，完全由界面上的启用开关控制。
-                // 快捷键按了也当没按——这种场景下用户本来就不想配快捷键。
-                crate::settings::HotkeyMode::Always => {}
-                crate::settings::HotkeyMode::Toggle => {
-                    // 只在按下时翻转，松开不动
+            match ev.slot {
+                crate::rawinput::HotkeySlot::Enable => {
+                    // 只认按下那一下，按住不放不该连续翻转
                     if ev.down {
-                        self.crosshair_armed = !self.crosshair_armed;
+                        let idx = self
+                            .settings
+                            .active_profile_index
+                            .min(self.settings.profiles.len().saturating_sub(1));
+                        if let Some(p) = self.settings.profiles.get_mut(idx) {
+                            p.crosshair.enabled = !p.crosshair.enabled;
+                            enable_dirty = true;
+                        }
                     }
                 }
-                crate::settings::HotkeyMode::HoldToHide => {
-                    self.crosshair_armed = !ev.down;
-                }
-                crate::settings::HotkeyMode::HoldToShow => {
-                    self.crosshair_armed = ev.down;
+                crate::rawinput::HotkeySlot::Show => {
+                    self.hotkey_held = ev.down;
+                    match mode {
+                        // 一直显示：忽略显示快捷键
+                        crate::settings::HotkeyMode::Always => {}
+                        crate::settings::HotkeyMode::Toggle => {
+                            if ev.down {
+                                self.crosshair_armed = !self.crosshair_armed;
+                            }
+                        }
+                        crate::settings::HotkeyMode::HoldToHide => {
+                            self.crosshair_armed = !ev.down;
+                        }
+                        crate::settings::HotkeyMode::HoldToShow => {
+                            self.crosshair_armed = ev.down;
+                        }
+                    }
                 }
             }
+        }
+        if enable_dirty {
+            let _ = self.save();
         }
         self.refresh_now();
     }
@@ -363,17 +386,22 @@ impl App {
         // 全局配置没有 program，任何时候都算"匹配"
         let matches = profile.program.is_empty() || program_focused;
 
-        // 「一直显示」模式完全跳过快捷键这一层——用户明确表示不用快捷键，
-        // 这时 crosshair_armed 可能是之前切模式时留下的旧值，不该挡住显示。
+        // 三个条件同时满足才显示：
+        //   1. 总闸打开（cfg.enabled，启用快捷键可翻，写盘）
+        //   2. 显示开关打开（crosshair_armed，显示快捷键可翻，不写盘）
+        //   3. 该配置对应的程序在前台
+        //
+        // 「一直显示」模式跳过第 2 条——用户明确表示不用显示快捷键，
+        // 这时 crosshair_armed 可能是切模式前的旧值，不该挡住显示。
         let armed = self.settings.hotkey_mode == crate::settings::HotkeyMode::Always
             || self.crosshair_armed;
 
-        if !armed || !cfg.is_visible() || !matches {
+        if !cfg.is_visible() || !armed || !matches {
             overlay.hide();
             self.crosshair_last = format!(
-                "隐藏：armed={} visible={} matches={}",
+                "隐藏：enabled={} armed={} matches={}",
+                cfg.enabled,
                 armed,
-                cfg.is_visible(),
                 matches
             );
             return;
@@ -486,6 +514,11 @@ impl App {
             modes: mode_options(),
             crosshair_available: self.overlay.is_some(),
             crosshair_armed: self.crosshair_armed,
+            enable_hotkey_name: self.settings.enable_hotkey.map(|h| match h.kind {
+                crate::settings::HotkeyKind::Keyboard => win::key_name(h.code as u32),
+                crate::settings::HotkeyKind::Mouse => mouse_key_name(h.code).to_string(),
+            }),
+            enable_hotkey: self.settings.enable_hotkey,
             hotkey_name: self.settings.hotkey.map(|h| match h.kind {
                 crate::settings::HotkeyKind::Keyboard => win::key_name(h.code as u32),
                 crate::settings::HotkeyKind::Mouse => mouse_key_name(h.code).to_string(),
@@ -897,8 +930,14 @@ impl App {
                 if payload.get("hotkey").is_some() {
                     self.settings.hotkey = parse("hotkey")?;
                 }
+                if payload.get("enableHotkey").is_some() {
+                    self.settings.enable_hotkey = parse("enableHotkey")?;
+                }
                 if let Some(overlay) = self.overlay.as_ref() {
-                    overlay.set_hotkey(self.settings.hotkey);
+                    overlay.set_hotkey(
+                        self.settings.hotkey,
+                        self.settings.enable_hotkey,
+                    );
                 }
                 self.save()?;
                 // 换了快捷键，按住状态从零开始
