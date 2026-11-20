@@ -156,17 +156,37 @@ impl Surface {
         self.pixels.iter_mut().for_each(|p| *p = 0);
     }
 
+    /// 把一个颜色按 alpha 叠加到像素上（源覆盖目标）。
+    ///
+    /// 描边先画、本体后画，直接覆盖会让描边的半透明边缘被吃掉；
+    /// 用标准 alpha 合成才叠得对。像素是预乘格式，合成公式相应简化。
     fn put(&mut self, x: i32, y: i32, color: [u8; 3], alpha: u8) {
         if x < 0 || y < 0 || x >= self.width || y >= self.height || alpha == 0 {
             return;
         }
-        // 预乘 alpha：BGRA 每个分量都乘以 a/255
-        let a = alpha as u32;
-        let b = (color[2] as u32 * a / 255) as u32;
-        let g = (color[1] as u32 * a / 255) as u32;
-        let r = (color[0] as u32 * a / 255) as u32;
-        let px = (a << 24) | (r << 16) | (g << 8) | b;
-        self.pixels[(y * self.width + x) as usize] = px;
+        let idx = (y * self.width + x) as usize;
+        let dst = self.pixels[idx];
+
+        let sa = alpha as u32;
+        let inv = 255 - sa;
+
+        let src_b = color[2] as u32 * sa / 255;
+        let src_g = color[1] as u32 * sa / 255;
+        let src_r = color[0] as u32 * sa / 255;
+        let _ = &dst;
+
+        // 预乘格式下：out = src + dst * (1 - src_a)
+        let dst_a = (dst >> 24) & 0xFF;
+        let dst_b = dst & 0xFF;
+        let dst_g = (dst >> 8) & 0xFF;
+        let dst_r = (dst >> 16) & 0xFF;
+
+        let a = sa + dst_a * inv / 255;
+        let b = src_b + dst_b * inv / 255;
+        let g = src_g + dst_g * inv / 255;
+        let r = src_r + dst_r * inv / 255;
+
+        self.pixels[idx] = (a.min(255) << 24) | (r.min(255) << 16) | (g.min(255) << 8) | b.min(255);
     }
 }
 
@@ -393,92 +413,71 @@ unsafe extern "system" fn wnd_proc(
 }
 
 /// 把准星画进像素缓冲。
+///
+/// 用距离场 + 4× 超采样：每个像素取四个子采样点，统计落在图形内的比例，
+/// 作为该像素的 alpha。这样圆环和斜边边缘是平滑的，不是锯齿。
+///
+/// 参数语义（和界面上的滑杆对应）：
+///   * `gap`     中心到线条起点的距离
+///   * `size`    线条总长度
+///   * `thickness` 线宽
 fn draw(surface: &mut Surface, cfg: &Crosshair) {
     surface.clear();
     let w = surface.width;
     let h = surface.height;
-    let center = (w / 2, h / 2);
-    let alpha = (cfg.opacity as u32 * 255 / 100) as u8;
-    let t = cfg.thickness.max(1) as i32;
-    let gap = cfg.gap as i32;
-    let size = cfg.size.max(1) as i32;
+    let center_x = w as f32 / 2.0;
+    let center_y = h as f32 / 2.0;
 
-    let mut put = |surface: &mut Surface, x: i32, y: i32, color: [u8; 3], a: u8| {
-        surface.put(x, y, color, a);
-    };
+    let half_width = cfg.thickness.max(1) as f32 / 2.0;
+    let radius = cfg.size.max(1) as f32 / 2.0;
+    let gap = cfg.gap as f32 / 2.0;
+    let dot_radius = (cfg.thickness.max(1) as f32 / 2.0).max(1.0);
 
-    // 描边：先画一圈更大的深色，再画本体。
+    let base_alpha = cfg.opacity as u32 * 255 / 100;
+    let outline = cfg.outline;
+
+    // 描边：同一套形状放大一圈画深色，再画本体。
     // 纯白准星在雪地或亮天空里会糊成一片。
-    let outline = cfg.outline as i32;
-    let passes: &[(i32, [u8; 3])] = if outline > 0 {
-        &[(outline, [0, 0, 0]), (0, cfg.color)]
-    } else {
-        &[(0, cfg.color)]
-    };
-
-    for &(pad, color) in passes {
-        let a = if color == [0, 0, 0] {
-            // 描边稍微透明一点，免得显得死黑
-            (alpha as u32 * 70 / 100) as u8
-        } else {
-            alpha
-        };
-        let th = t + pad;
+    for (pad, color, alpha_scale) in [
+        (outline as f32, [0u8, 0u8, 0u8], 70u32),
+        (0.0, cfg.color, 100u32),
+    ] {
+        let hw = half_width + pad;
+        let r = radius + pad;
         let g = gap;
-        let s = size + pad;
+        let a_base = base_alpha * alpha_scale / 100;
 
-        match cfg.style {
-            CrosshairStyle::Cross => {
-                // 四条线：上下左右各一段，中心留空。
-                // 笔画以中心线为轴左右各占 th/2，偶数宽度时向下取整，
-                // 保证四个方向完全对称。
-                let lo = -(th / 2);
-                let hi = lo + th;
-                for i in 0..s {
-                    for k in lo..hi {
-                        let off = g + i;
-                        put(surface, center.0 + off, center.1 + k, color, a);
-                        put(surface, center.0 - off, center.1 + k, color, a);
-                        put(surface, center.0 + k, center.1 + off, color, a);
-                        put(surface, center.0 + k, center.1 - off, color, a);
-                    }
-                }
-            }
-            CrosshairStyle::Dot => {
-                let r = (t + pad).max(1);
-                for dy in -r..=r {
-                    for dx in -r..=r {
-                        if dx * dx + dy * dy <= r * r {
-                            put(surface, center.0 + dx, center.1 + dy, color, a);
+        for y in 0..h {
+            for x in 0..w {
+                // 四个子采样点，各占 1/4 权重
+                let mut hits = 0u32;
+                for (sx, sy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+                    let px = x as f32 + sx - center_x;
+                    let py = y as f32 + sy - center_y;
+                    let dx = px.abs();
+                    let dy = py.abs();
+                    let distance = (dx * dx + dy * dy).sqrt();
+
+                    let inside = match cfg.style {
+                        CrosshairStyle::Cross => {
+                            // 横竖各一条，中心留空
+                            (dx <= hw && dy >= g && dy <= g + r)
+                                || (dy <= hw && dx >= g && dx <= g + r)
                         }
-                    }
-                }
-            }
-            CrosshairStyle::Ring => {
-                let r = s.max(2);
-                let band = th.max(1);
-                for dy in -r..=r {
-                    for dx in -r..=r {
-                        let d2 = dx * dx + dy * dy;
-                        let outer = r * r;
-                        let inner = (r - band) * (r - band);
-                        if d2 <= outer && d2 >= inner {
-                            put(surface, center.0 + dx, center.1 + dy, color, a);
+                        CrosshairStyle::Dot => distance <= dot_radius + pad,
+                        CrosshairStyle::Ring => (distance - r).abs() <= hw,
+                        CrosshairStyle::TShape => {
+                            // 上、左、右三向，没有下
+                            (dx <= hw && py <= -g && py >= -g - r)
+                                || (dy <= hw && dx >= g && dx <= g + r)
                         }
+                    };
+                    if inside {
+                        hits += 1;
                     }
                 }
-            }
-            CrosshairStyle::TShape => {
-                // 上、左、右三段，没有下
-                let lo = -(th / 2);
-                let hi = lo + th;
-                for i in 0..s {
-                    for k in lo..hi {
-                        let off = g + i;
-                        put(surface, center.0 + k, center.1 - off, color, a);
-                        put(surface, center.0 + off, center.1 + k, color, a);
-                        put(surface, center.0 - off, center.1 + k, color, a);
-                    }
+                if hits > 0 {
+                    surface.put(x, y, color, (a_base * hits / 4) as u8);
                 }
             }
         }
