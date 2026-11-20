@@ -669,11 +669,6 @@
     min-width: 0;
   }
 
-  .ch-hint {
-    font-size: 11.5px;
-    color: var(--ink-5);
-    line-height: 1.5;
-  }
 
   /* 开关：和整体配色一致的黑白灰 */
   .switch {
@@ -897,12 +892,6 @@
     place-items: center;
   }
 
-  .ch-preview-hint {
-    margin: 10px 0 0;
-    font-size: 11.5px;
-    color: var(--ink-5);
-    line-height: 1.6;
-  }
 
   .section-title {
 
@@ -1728,7 +1717,6 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                    stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
             </button>
-            <span class="ch-hint">准星功能的总开关，会保存</span>
           </div>
         </div>
 
@@ -1740,7 +1728,6 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                    stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
             </button>
-            <span class="ch-hint">总开关打开时，用它控制显不显示</span>
           </div>
         </div>
 
@@ -1816,13 +1803,11 @@
             <input type="number" class="ch-num" id="ch-offset-x" min="-4000" max="4000" step="1">
             <span class="ch-axis">Y</span>
             <input type="number" class="ch-num" id="ch-offset-y" min="-4000" max="4000" step="1">
-            <span class="ch-hint">相对屏幕中心，物理像素</span>
           </div>
         </div>
 
         <div class="ch-preview-wrap">
           <div class="ch-preview" id="ch-preview"></div>
-          <p class="ch-preview-hint">准星只在目标程序位于前台时显示，位置跟随鼠标所在显示器。</p>
         </div>
       </div>
     </main>
@@ -1923,13 +1908,14 @@ const HOTKEY_MODES = [
 
 const MOUSE_KEY_NAMES = ["左键", "右键", "中键", "侧键 1", "侧键 2"];
 
+// 预设色。第一个是和默认值一致的青绿——自然界少见，深色浅色背景上都跳。
 const CH_COLORS = [
+  [0, 255, 170],
   [255, 255, 255],
   [0, 0, 0],
   [255, 64, 64],
   [64, 200, 255],
   [255, 210, 64],
-  [120, 255, 120],
 ];
 
 const MODE_SHORT = {

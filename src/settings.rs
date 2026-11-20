@@ -241,7 +241,9 @@ impl Default for Crosshair {
         Crosshair {
             enabled: false,
             style: CrosshairStyle::Cross,
-            color: [255, 255, 255],
+            // 默认用青绿：自然界少见的颜色，在深色和浅色背景上都跳得出来。
+            // 纯白在雪地、亮天空里会糊成一片。
+            color: [0, 255, 170],
             thickness: 2,
             gap: 4,
             size: 10,
