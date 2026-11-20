@@ -1877,7 +1877,6 @@ const HOTKEY_MODES = [
   { value: "TOGGLE", label: "切换" },
   { value: "HOLD_TO_HIDE", label: "按住隐藏" },
   { value: "HOLD_TO_SHOW", label: "按住显示" },
-  { value: "ALWAYS", label: "显示" },
 ];
 
 const MOUSE_KEY_NAMES = ["左键", "右键", "中键", "侧键 1", "侧键 2"];
@@ -2233,11 +2232,11 @@ function renderCrosshair() {
   showClear.disabled = !state.hotkey;
   enableClear.disabled = !state.enableHotkey;
 
-  // 「一直显示」时显示快捷键用不上，置灰——留着可点会让人以为还要配
-  const always = state.hotkeyMode === "ALWAYS";
-  showBtn.disabled = always;
-  showClear.disabled = always || !state.hotkey;
-  showBtn.classList.toggle("muted", always);
+  // 「切换」模式下显示快捷键用不上，置灰——留着可点会让人以为还要配
+  const noShowKey = state.hotkeyMode === "TOGGLE";
+  showBtn.disabled = noShowKey;
+  showClear.disabled = noShowKey || !state.hotkey;
+  showBtn.classList.toggle("muted", noShowKey);
 
   renderCrosshairPreview(c);
 

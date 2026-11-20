@@ -181,8 +181,6 @@ pub enum HotkeyMode {
     HoldToHide,
     /// 按住时显示，松开隐藏
     HoldToShow,
-    /// 一直显示，不响应快捷键。只用界面上的启用开关控制。
-    Always,
 }
 
 impl HotkeyMode {
@@ -191,7 +189,6 @@ impl HotkeyMode {
             HotkeyMode::Toggle => "TOGGLE",
             HotkeyMode::HoldToHide => "HOLD_TO_HIDE",
             HotkeyMode::HoldToShow => "HOLD_TO_SHOW",
-            HotkeyMode::Always => "ALWAYS",
         }
     }
     pub fn from_settings_str(s: &str) -> Option<Self> {
@@ -199,7 +196,8 @@ impl HotkeyMode {
             "TOGGLE" => Some(HotkeyMode::Toggle),
             "HOLD_TO_HIDE" => Some(HotkeyMode::HoldToHide),
             "HOLD_TO_SHOW" => Some(HotkeyMode::HoldToShow),
-            "ALWAYS" => Some(HotkeyMode::Always),
+            // 旧配置里可能还有 ALWAYS（已合并到 Toggle），读成 Toggle
+            "ALWAYS" => Some(HotkeyMode::Toggle),
             _ => None,
         }
     }
@@ -208,16 +206,10 @@ impl HotkeyMode {
             HotkeyMode::Toggle => "切换",
             HotkeyMode::HoldToHide => "按住时隐藏",
             HotkeyMode::HoldToShow => "按住时显示",
-            HotkeyMode::Always => "显示",
         }
     }
-    pub fn all() -> [HotkeyMode; 4] {
-        [
-            HotkeyMode::Toggle,
-            HotkeyMode::HoldToHide,
-            HotkeyMode::HoldToShow,
-            HotkeyMode::Always,
-        ]
+    pub fn all() -> [HotkeyMode; 3] {
+        [HotkeyMode::Toggle, HotkeyMode::HoldToHide, HotkeyMode::HoldToShow]
     }
 }
 
