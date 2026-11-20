@@ -340,12 +340,8 @@ impl Overlay {
     }
 
     /// 按新的快捷键重新注册 Raw Input 设备。
-    pub fn set_hotkey(
-        &self,
-        hotkey: Option<crate::settings::Hotkey>,
-        enable_hotkey: Option<crate::settings::Hotkey>,
-    ) {
-        crate::rawinput::reconfigure(self.hwnd, &self.raw, hotkey, enable_hotkey);
+    pub fn set_hotkey(&self, hotkey: Option<crate::settings::Hotkey>) {
+        crate::rawinput::reconfigure(self.hwnd, &self.raw, hotkey);
     }
 
     /// Raw Input 是否注册成功（诊断用）。

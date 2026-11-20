@@ -181,6 +181,8 @@ pub enum HotkeyMode {
     HoldToHide,
     /// 按住时显示，松开隐藏
     HoldToShow,
+    /// 一直显示，不响应快捷键。只用界面上的启用开关控制。
+    Always,
 }
 
 impl HotkeyMode {
@@ -189,6 +191,7 @@ impl HotkeyMode {
             HotkeyMode::Toggle => "TOGGLE",
             HotkeyMode::HoldToHide => "HOLD_TO_HIDE",
             HotkeyMode::HoldToShow => "HOLD_TO_SHOW",
+            HotkeyMode::Always => "ALWAYS",
         }
     }
     pub fn from_settings_str(s: &str) -> Option<Self> {
@@ -196,6 +199,7 @@ impl HotkeyMode {
             "TOGGLE" => Some(HotkeyMode::Toggle),
             "HOLD_TO_HIDE" => Some(HotkeyMode::HoldToHide),
             "HOLD_TO_SHOW" => Some(HotkeyMode::HoldToShow),
+            "ALWAYS" => Some(HotkeyMode::Always),
             _ => None,
         }
     }
@@ -204,10 +208,16 @@ impl HotkeyMode {
             HotkeyMode::Toggle => "按一下切换",
             HotkeyMode::HoldToHide => "按住时隐藏",
             HotkeyMode::HoldToShow => "按住时显示",
+            HotkeyMode::Always => "一直显示",
         }
     }
-    pub fn all() -> [HotkeyMode; 3] {
-        [HotkeyMode::Toggle, HotkeyMode::HoldToHide, HotkeyMode::HoldToShow]
+    pub fn all() -> [HotkeyMode; 4] {
+        [
+            HotkeyMode::Toggle,
+            HotkeyMode::HoldToHide,
+            HotkeyMode::HoldToShow,
+            HotkeyMode::Always,
+        ]
     }
 }
 
@@ -281,8 +291,6 @@ pub struct Settings {
     /// 准星快捷键。全局设置——它控制的是"怎么开关"，不是"显示什么"，
     /// 所以不跟 profile 走。
     pub hotkey: Option<Hotkey>,
-    /// 切换"启用"的快捷键。和 hotkey（显示开关）是两个独立的键。
-    pub enable_hotkey: Option<Hotkey>,
     pub hotkey_mode: HotkeyMode,
 }
 
@@ -292,7 +300,6 @@ impl Default for Settings {
             profiles: Vec::new(),
             active_profile_index: 0,
             hotkey: None,
-            enable_hotkey: None,
             hotkey_mode: HotkeyMode::Toggle,
         }
     }
@@ -303,7 +310,6 @@ impl Settings {
     pub fn parse(text: &str) -> Result<Settings, String> {
         let mut settings = Settings::default();
         let mut hotkey: Option<Hotkey> = None;
-        let mut enable_hotkey: Option<Hotkey> = None;
         let mut hotkey_mode = HotkeyMode::Toggle;
 
         let mut version_ok = false;
@@ -347,17 +353,6 @@ impl Settings {
                                 parts[1].parse::<u16>(),
                             ) {
                                 hotkey = Some(Hotkey { kind, code });
-                            }
-                        }
-                    }
-                    "enable_hotkey" => {
-                        let parts: Vec<&str> = v.split_whitespace().collect();
-                        if parts.len() == 2 {
-                            if let (Some(kind), Ok(code)) = (
-                                HotkeyKind::from_settings_str(parts[0]),
-                                parts[1].parse::<u16>(),
-                            ) {
-                                enable_hotkey = Some(Hotkey { kind, code });
                             }
                         }
                     }
@@ -490,7 +485,6 @@ impl Settings {
         }
 
         settings.hotkey = hotkey;
-        settings.enable_hotkey = enable_hotkey;
         settings.hotkey_mode = hotkey_mode;
 
         if settings.profiles.is_empty() {
@@ -515,14 +509,6 @@ impl Settings {
         if let Some(hk) = self.hotkey {
             out.push_str(&format!(
                 "hotkey: {} {}\n",
-                hk.kind.as_settings_str(),
-                hk.code
-            ));
-        }
-        if let Some(hk) = self.enable_hotkey {
-            out.push_str(&format!(
-                "enable_hotkey: {} {}
-",
                 hk.kind.as_settings_str(),
                 hk.code
             ));
@@ -713,21 +699,6 @@ mod tests {
         let parsed = Settings::parse(&text).expect("parse");
         assert_eq!(parsed.hotkey, Some(Hotkey { kind: HotkeyKind::Mouse, code: 3 }));
         assert_eq!(parsed.hotkey_mode, HotkeyMode::HoldToHide);
-    }
-
-    #[test]
-    fn both_hotkeys_roundtrip() {
-        let mut s = Settings::default();
-        s.hotkey = Some(Hotkey { kind: HotkeyKind::Mouse, code: 3 });
-        s.enable_hotkey = Some(Hotkey { kind: HotkeyKind::Keyboard, code: 0x41 });
-        let text = s.serialize();
-        let parsed = Settings::parse(&text).expect("parse");
-        assert_eq!(parsed.hotkey, Some(Hotkey { kind: HotkeyKind::Mouse, code: 3 }));
-        assert_eq!(
-            parsed.enable_hotkey,
-            Some(Hotkey { kind: HotkeyKind::Keyboard, code: 0x41 }),
-            "启用快捷键必须能读回来"
-        );
     }
 
     #[test]
