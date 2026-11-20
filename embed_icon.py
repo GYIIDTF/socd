@@ -13,6 +13,7 @@ import sys
 
 RT_ICON = 3
 RT_GROUP_ICON = 14
+RT_VERSION = 16
 LANG_EN_US = 0x0409
 
 
@@ -112,6 +113,17 @@ def build_rsrc(ico_bytes, rsrc_rva):
     entries = [(RT_ICON, iid, img["data"]) for img, iid in zip(images, icon_ids)]
     entries.append((RT_GROUP_ICON, group_id, group))
 
+    # RT_VERSION：文件属性里看到的版本号、产品名、公司名。
+    # 没有这块的 exe 在杀软静态扫描里可疑度更高。
+    version_blob = build_version_info(
+        version=(0, 2, 2, 0),
+        company="恨海情天",
+        product="恨海情天 · SOCD",
+        description="SOCD 按键重映射工具",
+        copyright_="MIT License",
+    )
+    entries.append((RT_VERSION, 1, version_blob))
+
     # 三层目录布局：根 -> 类型 -> 名称 -> 数据条目，最后是数据本体
     by_type = {}
     for e in entries:
@@ -189,6 +201,96 @@ def build_rsrc(ico_bytes, rsrc_rva):
 
 
 # -------------------------------------------------------------------- 主流程
+
+# --------------------------------------------------------------- 版本资源
+
+def _vs_pad(b):
+    """版本资源里每个块都按 4 字节对齐。"""
+    while len(b) % 4:
+        b += b"\0"
+    return b
+
+
+def _align4(b):
+    while len(b) % 4:
+        b += b"\x00"
+    return b
+
+
+def _vs_node(key, children, wtype=0, wvalue_len=0):
+    """构造一个版本资源节点。
+
+    key          —— UTF-16 的键名
+    children     —— 已是字节的首部值（子块拼接或二进制数据）
+    wtype        —— 0 = 二进制，1 = 文本
+    wvalue_len   —— 按 wtype 的规则给：文本是字符数，二进制是字节数
+    """
+    key_w = key.encode("utf-16-le") + b"\x00\x00"
+    head = struct.pack("<HHH", 0, wvalue_len, wtype) + key_w
+    head = _align4(head)
+    body = head + children
+    # wLength 只算块本身，不含末尾的对齐填充
+    block = struct.pack("<H", len(body)) + body[2:]
+    # 但返回值必须补齐 4 字节：否则下一个兄弟块会从错位的地址开始读，
+    # 表现为第一个字符串能读到、后面全是空。
+    return _align4(block)
+
+
+def _vs_string(key, value):
+    """一个字符串项。wValueLength 是字符数（含结尾 NUL）。"""
+    text = value.encode("utf-16-le") + b"\x00\x00"
+    return _vs_node(key, text, wtype=1, wvalue_len=len(text) // 2)
+
+
+def build_version_info(version, company, product, description, copyright_):
+    """构造 VS_VERSIONINFO 资源体。
+
+    version 是 (major, minor, patch, build)。这块是 Windows 在文件属性里
+    显示版本号、产品名、公司名的来源。
+    """
+    major, minor, patch, build = version
+    ms = (major << 16) | minor
+    ls = (patch << 16) | build
+
+    fixed = struct.pack(
+        "<IIIIIIIIIIIII",
+        0xFEEF04BD,       # dwSignature
+        0x00010000,       # dwStrucVersion
+        ms, ls,           # FileVersion
+        ms, ls,           # ProductVersion
+        0x3F,             # dwFileFlagsMask
+        0,                # dwFileFlags
+        0x00040004,       # dwFileOS = VOS_NT_WINDOWS32
+        0x00000001,       # dwFileType = VFT_APP
+        0,                # dwFileSubtype
+        0, 0,             # dwFileDate
+    )
+
+    ver_text = f"{major}.{minor}.{patch}.{build}"
+
+    # StringFileInfo 里的一个语言页。键必须是 8 位十六进制的语言+代码页。
+    lang_page = "080404B0"   # 简体中文 + Unicode
+    table = b"".join([
+        _vs_string("CompanyName", company),
+        _vs_string("FileDescription", description),
+        _vs_string("FileVersion", ver_text),
+        _vs_string("InternalName", "SOCD"),
+        _vs_string("LegalCopyright", copyright_),
+        _vs_string("OriginalFilename", "SOCD.exe"),
+        _vs_string("ProductName", product),
+        _vs_string("ProductVersion", ver_text),
+    ])
+    string_table = _vs_node(lang_page, table)
+    string_file_info = _vs_node("StringFileInfo", string_table)
+
+    # VarFileInfo 声明语言页，供系统定位。没有它有些工具会读不到字符串。
+    translation = _vs_node("Translation", struct.pack("<HH", 0x0804, 0x04B0), wtype=0, wvalue_len=4)
+    var_file_info = _vs_node("VarFileInfo", translation)
+
+    # 根节点：值是 VS_FIXEDFILEINFO，52 字节
+    root_value = fixed + string_file_info + var_file_info
+    return _vs_node("VS_VERSION_INFO", root_value, wtype=0, wvalue_len=len(fixed))
+
 
 def main():
     if len(sys.argv) != 3:
