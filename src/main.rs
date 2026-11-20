@@ -5,6 +5,7 @@
 //! 而核心保持原生 Rust——钩子回调跑在系统输入链上，不能被 GC 停顿影响。
 
 mod app;
+mod crosshair;
 mod logging;
 mod paths;
 mod server;

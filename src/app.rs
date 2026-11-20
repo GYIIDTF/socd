@@ -32,6 +32,7 @@ pub struct ProfileView {
     pub index: usize,
     pub program: String,
     pub mappings: Vec<MappingView>,
+    pub crosshair: crate::settings::Crosshair,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +47,13 @@ pub struct StateView {
     /// 配置读取失败的用户可见说明，正常时为 null
     pub load_error: Option<String>,
     pub modes: Vec<ModeOption>,
+    /// 准星叠加层是否可用（窗口创建成功）
+    pub crosshair_available: bool,
+    /// 准星总开关
+    pub crosshair_armed: bool,
+    /// 开关键的扫描码，0 表示未设置
+    pub crosshair_key: ScanCode,
+    pub crosshair_last: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +121,14 @@ pub struct App {
     /// 配置文件存在但读不出来时的说明。非空表示"当前界面上是空配置，
     /// 继续操作会覆盖原文件"，必须让用户看见。
     pub load_error: Option<String>,
+    /// 准星叠加层。创建失败时为 None，功能降级但不影响按键映射。
+    pub overlay: Option<Arc<crate::crosshair::Overlay>>,
+    /// 准星总开关（用户按开关键切换）。关掉后任何配置的准星都不显示。
+    pub crosshair_armed: bool,
+    /// 准星开关键。全局生效，不受配置启用状态影响。
+    pub crosshair_key: Option<ScanCode>,
+    /// 最近一次准星渲染的结果，用于界面/诊断
+    pub crosshair_last: String,
 }
 
 impl App {
@@ -153,6 +169,10 @@ impl App {
             guard: None,
             first_run,
             load_error,
+            overlay: crate::crosshair::Overlay::new(),
+            crosshair_armed: true,
+            crosshair_key: None,
+            crosshair_last: String::new(),
         };
 
         if app.settings.profiles.is_empty() {
@@ -205,6 +225,11 @@ impl App {
 
     /// Called on a timer: enables the hook only while the armed program is focused.
     pub fn poll_focus(&mut self) {
+        // 钩子线程只能置位，真正的切换在这里做
+        if self.hook.crosshair_toggle.swap(false, Ordering::Relaxed) {
+            self.crosshair_armed = !self.crosshair_armed;
+        }
+
         if self.settings.profiles.is_empty() {
             return;
         }
@@ -242,6 +267,109 @@ impl App {
         } else {
             None
         };
+
+        self.refresh_crosshair(should_enable);
+    }
+
+    /// 按当前状态决定准星是否显示、显示成什么样。
+    ///
+    /// 三个条件同时满足才显示：
+    ///   1. 总开关打开（开关键可切）
+    ///   2. 当前配置的准星 enabled
+    ///   3. 该配置对应的程序在前台（全局配置则始终满足）
+    ///
+    /// 位置取"鼠标所在显示器"与"前台窗口客户区"的交集——准星只在游戏
+    /// 窗口范围内出现，不会飘到桌面或别的窗口上。
+    fn refresh_crosshair(&mut self, program_focused: bool) {
+        let Some(overlay) = self.overlay.clone() else {
+            return;
+        };
+
+        let idx = self
+            .settings
+            .active_profile_index
+            .min(self.settings.profiles.len().saturating_sub(1));
+        let Some(profile) = self.settings.profiles.get(idx) else {
+            return;
+        };
+
+        let cfg = profile.crosshair;
+        // 全局配置没有 program，任何时候都算"匹配"
+        let matches = profile.program.is_empty() || program_focused;
+
+        if !self.crosshair_armed || !cfg.is_visible() || !matches {
+            overlay.hide();
+            self.crosshair_last = format!(
+                "隐藏：armed={} visible={} matches={}",
+                self.crosshair_armed,
+                cfg.is_visible(),
+                matches
+            );
+            return;
+        }
+
+        let Some(client) = crate::crosshair::foreground_client_rect() else {
+            overlay.hide();
+            self.crosshair_last = "隐藏：拿不到前台窗口客户区".into();
+            return;
+        };
+        let Some(monitor) = crate::crosshair::monitor_under_cursor() else {
+            overlay.hide();
+            self.crosshair_last = "隐藏：拿不到鼠标所在显示器".into();
+            return;
+        };
+
+        // 交集：窗口可能横跨两块屏，准星画在两者都覆盖的区域中心
+        let left = client.0.max(monitor.0);
+        let top = client.1.max(monitor.1);
+        let right = client.2.min(monitor.2);
+        let bottom = client.3.min(monitor.3);
+        if right <= left || bottom <= top {
+            // 窗口完全不在鼠标那块屏上
+            overlay.hide();
+            self.crosshair_last = format!(
+                "隐藏：窗口({},{},{},{}) 与显示器({},{},{},{}) 无交集",
+                client.0, client.1, client.2, client.3,
+                monitor.0, monitor.1, monitor.2, monitor.3
+            );
+            return;
+        }
+
+        self.crosshair_last = overlay.apply(&cfg, Some((left, top, right, bottom)));
+    }
+
+    /// 立即按当前前台状态刷新一次准星。配置改动后调用。
+    fn refresh_now(&mut self) {
+        let idx = self
+            .settings
+            .active_profile_index
+            .min(self.settings.profiles.len().saturating_sub(1));
+        let focused = self
+            .settings
+            .profiles
+            .get(idx)
+            .map(|p| {
+                p.program.is_empty()
+                    || win::foreground_program()
+                        .map(|f| f.eq_ignore_ascii_case(&p.program))
+                        .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        self.refresh_crosshair(focused);
+    }
+
+    /// 切换准星总开关。返回切换后的状态。
+    pub fn toggle_crosshair(&mut self) -> bool {
+        self.crosshair_armed = !self.crosshair_armed;
+        let enabled = self.armed.is_some()
+            || self
+                .settings
+                .profiles
+                .get(self.settings.active_profile_index)
+                .map(|p| p.program.is_empty())
+                .unwrap_or(true);
+        self.refresh_crosshair(enabled);
+        self.crosshair_armed
     }
 
     pub fn drain_events(&self) -> Vec<Value> {
@@ -276,6 +404,7 @@ impl App {
                     index,
                     program: p.program.clone(),
                     mappings: p.mappings.iter().map(mapping_view).collect(),
+                    crosshair: p.crosshair,
                 })
                 .collect(),
             active_index: active,
@@ -284,6 +413,10 @@ impl App {
             settings_path: self.path.display().to_string(),
             load_error: self.load_error.clone(),
             modes: mode_options(),
+            crosshair_available: self.overlay.is_some(),
+            crosshair_armed: self.crosshair_armed,
+            crosshair_key: self.hook.crosshair_key.load(Ordering::Relaxed),
+            crosshair_last: self.crosshair_last.clone(),
         }
     }
 
@@ -591,6 +724,74 @@ impl App {
                     profile.mappings.remove(pos);
                 }
                 profile.mappings.push(draft);
+                Ok(self.state()?)
+            }
+
+            // ---- 准星 ----
+
+            "updateCrosshair" => {
+                let idx = self
+                    .settings
+                    .active_profile_index
+                    .min(self.settings.profiles.len().saturating_sub(1));
+                let payload_cfg = payload.get("crosshair").cloned().unwrap_or(Value::Null);
+                let profile = self.active_profile_mut()?;
+                let mut c = profile.crosshair;
+
+                if let Some(v) = payload_cfg.get("enabled").and_then(Value::as_bool) {
+                    c.enabled = v;
+                }
+                if let Some(v) = payload_cfg.get("style").and_then(Value::as_str) {
+                    if let Some(s) = crate::settings::CrosshairStyle::from_settings_str(v) {
+                        c.style = s;
+                    }
+                }
+                if let Some(arr) = payload_cfg.get("color").and_then(Value::as_array) {
+                    if arr.len() == 3 {
+                        let mut rgb = [0u8; 3];
+                        for (i, x) in arr.iter().enumerate() {
+                            rgb[i] = x.as_u64().unwrap_or(255).min(255) as u8;
+                        }
+                        c.color = rgb;
+                    }
+                }
+                if let Some(v) = payload_cfg.get("thickness").and_then(Value::as_u64) {
+                    c.thickness = (v as u32).clamp(1, 20);
+                }
+                if let Some(v) = payload_cfg.get("gap").and_then(Value::as_u64) {
+                    c.gap = (v as u32).min(100);
+                }
+                if let Some(v) = payload_cfg.get("size").and_then(Value::as_u64) {
+                    c.size = (v as u32).clamp(1, 100);
+                }
+                if let Some(v) = payload_cfg.get("opacity").and_then(Value::as_u64) {
+                    c.opacity = (v as u8).min(100);
+                }
+                if let Some(v) = payload_cfg.get("outline").and_then(Value::as_u64) {
+                    c.outline = (v as u32).min(10);
+                }
+
+                {
+                    let profile = self.active_profile_mut()?;
+                    profile.crosshair = c;
+                }
+                let _ = idx;
+                self.save()?;
+                self.refresh_now();
+                Ok(self.state()?)
+            }
+
+            "setCrosshairKey" => {
+                // scan = 0 表示取消开关键
+                let scan = payload.get("scan").and_then(Value::as_u64).unwrap_or(0) as ScanCode;
+                self.hook.crosshair_key.store(scan, Ordering::Relaxed);
+                self.crosshair_key = if scan == 0 { None } else { Some(scan) };
+                Ok(self.state()?)
+            }
+
+            "toggleCrosshair" => {
+                self.crosshair_armed = !self.crosshair_armed;
+                self.refresh_now();
                 Ok(self.state()?)
             }
 

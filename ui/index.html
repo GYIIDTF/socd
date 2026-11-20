@@ -609,6 +609,194 @@
 
   }
 
+  /* hidden 属性要能压过各元素的 display 规则 */
+  [hidden] { display: none !important; }
+
+  /* 主区视图切换：按键映射 / 准星 */
+  .view-tabs {
+    display: inline-flex;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--md-corner-sm);
+    overflow: hidden;
+  }
+
+  .view-tab {
+    font: inherit;
+    font-size: 12.5px;
+    padding: 6px 14px;
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: background var(--md-dur) var(--md-ease), color var(--md-dur) var(--md-ease);
+  }
+
+  .view-tab + .view-tab { border-left: 1px solid var(--line-strong); }
+
+  .view-tab:hover { background: var(--hover-on-light); }
+
+  .view-tab.active {
+    background: var(--black);
+    color: var(--white);
+  }
+
+  /* ---------------- 准星面板 ---------------- */
+
+  .crosshair-panel {
+    padding: 4px 2px 20px;
+  }
+
+  .ch-row {
+    display: grid;
+    grid-template-columns: 108px minmax(0, 1fr);
+    align-items: center;
+    gap: 16px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .ch-row:last-of-type { border-bottom: 0; }
+
+  .ch-label {
+    font-size: 12.5px;
+    color: var(--ink-2);
+  }
+
+  .ch-field {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .ch-hint {
+    font-size: 11.5px;
+    color: var(--ink-5);
+    line-height: 1.5;
+  }
+
+  /* 开关：和整体配色一致的黑白灰 */
+  .switch {
+    position: relative;
+    width: 38px;
+    height: 22px;
+    border-radius: 11px;
+    border: 1px solid var(--line-strong);
+    background: var(--surface-3);
+    cursor: pointer;
+    padding: 0;
+    flex: none;
+    transition: background var(--md-dur) var(--md-ease),
+                border-color var(--md-dur) var(--md-ease);
+  }
+
+  .switch .knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--white);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+    transition: transform var(--md-dur) var(--md-ease);
+  }
+
+  .switch[aria-checked="true"] {
+    background: var(--black);
+    border-color: var(--black);
+  }
+
+  .switch[aria-checked="true"] .knob { transform: translateX(16px); }
+
+  /* 样式选择 */
+  .ch-style { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .ch-style button {
+    font: inherit;
+    font-size: 12px;
+    padding: 6px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--md-corner-sm);
+    background: var(--white);
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: background var(--md-dur) var(--md-ease), color var(--md-dur) var(--md-ease),
+                border-color var(--md-dur) var(--md-ease);
+  }
+
+  .ch-style button:hover { background: var(--hover-on-light); }
+
+  .ch-style button[aria-pressed="true"] {
+    background: var(--black);
+    border-color: var(--black);
+    color: var(--white);
+  }
+
+  /* 颜色选择 */
+  .ch-colors { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .ch-color {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, .18);
+    cursor: pointer;
+    padding: 0;
+    transition: transform var(--md-dur) var(--md-ease), box-shadow var(--md-dur) var(--md-ease);
+  }
+
+  .ch-color:hover { transform: scale(1.1); }
+
+  .ch-color[aria-pressed="true"] {
+    box-shadow: 0 0 0 2px var(--white), 0 0 0 3.5px var(--black);
+  }
+
+  /* 滑杆 */
+  .ch-field input[type="range"] {
+    flex: 1;
+    min-width: 120px;
+    max-width: 320px;
+    accent-color: var(--black);
+    height: 4px;
+    cursor: pointer;
+  }
+
+  .ch-field output {
+    font-size: 12px;
+    color: var(--ink-2);
+    font-variant-numeric: tabular-nums;
+    min-width: 28px;
+    text-align: right;
+  }
+
+  /* 开关键按钮 */
+  .ch-key {
+    min-width: 110px;
+    height: 40px;
+    flex: none;
+  }
+
+  /* 预览 */
+  .ch-preview-wrap { margin-top: 18px; }
+
+  .ch-preview {
+    position: relative;
+    height: 152px;
+    border-radius: var(--md-corner-md);
+    background: #2a2a2a;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+  }
+
+  .ch-preview-hint {
+    margin: 10px 0 0;
+    font-size: 11.5px;
+    color: var(--ink-5);
+    line-height: 1.6;
+  }
+
   .section-title {
 
     font-size: 16px;
@@ -1411,6 +1599,10 @@
 
     <main class="main">
       <div class="section-head">
+        <div class="view-tabs" id="view-tabs">
+          <button class="view-tab active" data-view="mapping">按键映射</button>
+          <button class="view-tab" data-view="crosshair">准星</button>
+        </div>
         <span style="flex:1"></span>
         <button class="side-btn" id="btn-add-mapping">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1419,6 +1611,85 @@
         </button>
       </div>
       <div class="rows" id="rows"></div>
+
+      <div class="crosshair-panel" id="crosshair-panel" hidden>
+        <div class="ch-row">
+          <label class="ch-label">启用</label>
+          <div class="ch-field">
+            <button class="switch" id="ch-enabled" role="switch" aria-checked="false">
+              <span class="knob"></span>
+            </button>
+            <span class="ch-hint" id="ch-enabled-hint">该配置在前台时显示准星</span>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">样式</label>
+          <div class="ch-field">
+            <div class="ch-style" id="ch-style"></div>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">颜色</label>
+          <div class="ch-field">
+            <div class="ch-colors" id="ch-colors"></div>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">线宽</label>
+          <div class="ch-field">
+            <input type="range" id="ch-thickness" min="1" max="10" step="1">
+            <output id="ch-thickness-val"></output>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">中心间距</label>
+          <div class="ch-field">
+            <input type="range" id="ch-gap" min="0" max="40" step="1">
+            <output id="ch-gap-val"></output>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">长度</label>
+          <div class="ch-field">
+            <input type="range" id="ch-size" min="2" max="40" step="1">
+            <output id="ch-size-val"></output>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">不透明度</label>
+          <div class="ch-field">
+            <input type="range" id="ch-opacity" min="10" max="100" step="5">
+            <output id="ch-opacity-val"></output>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">描边</label>
+          <div class="ch-field">
+            <input type="range" id="ch-outline" min="0" max="5" step="1">
+            <output id="ch-outline-val"></output>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">开关快捷键</label>
+          <div class="ch-field">
+            <button class="cap ch-key" id="ch-key" data-side="key">未设置</button>
+            <span class="ch-hint">按下可切换全局准星显示，右键清空</span>
+          </div>
+        </div>
+
+        <div class="ch-preview-wrap">
+          <div class="ch-preview" id="ch-preview"></div>
+          <p class="ch-preview-hint">准星只在目标程序位于前台时显示，位置跟随鼠标所在显示器。</p>
+        </div>
+      </div>
     </main>
   </div>
 </div>
@@ -1500,6 +1771,24 @@ function esc(s) {
   }[c]));
 }
 
+const CH_STYLES = [
+  { value: "CROSS", label: "十字" },
+  { value: "DOT", label: "圆点" },
+  { value: "RING", label: "圆环" },
+  { value: "TSHAPE", label: "T 形" },
+];
+
+// 常用准星色。刻意避开荧光绿/亮粉——那种颜色在某些游戏里
+// 容易和"外挂提示色"混为一谈。
+const CH_COLORS = [
+  [255, 255, 255],
+  [0, 0, 0],
+  [255, 64, 64],
+  [64, 200, 255],
+  [255, 210, 64],
+  [120, 255, 120],
+];
+
 const MODE_SHORT = {
   REMAP: "重映射",
   OPPOSITE: "后按生效",
@@ -1514,6 +1803,7 @@ function render() {
   renderStatus();
   renderTabs();
   renderRows();
+  renderCrosshair();
 }
 
 function renderStatus() {
@@ -1708,6 +1998,156 @@ function renderRows() {
 
     host.appendChild(row);
   });
+}
+
+/* =============== 视图切换 =============== */
+
+let currentView = "mapping";
+
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll(".view-tab").forEach(t => {
+    t.classList.toggle("active", t.dataset.view === view);
+  });
+  document.getElementById("rows").hidden = view !== "mapping";
+  document.getElementById("crosshair-panel").hidden = view !== "crosshair";
+  // 添加映射按钮只在映射视图有意义
+  document.getElementById("btn-add-mapping").hidden = view !== "mapping";
+  if (view === "crosshair") renderCrosshair();
+}
+
+document.querySelectorAll(".view-tab").forEach(t => {
+  t.onclick = () => switchView(t.dataset.view);
+});
+
+/* =============== 准星 =============== */
+
+function activeProfile() {
+  return state && state.profiles[state.activeIndex];
+}
+
+function chConfig() {
+  const p = activeProfile();
+  return p ? p.crosshair : null;
+}
+
+// 把当前配置推给后端。参数变化频繁（拖滑杆），做一点合并。
+let chPushTimer = null;
+function pushCrosshair(patch) {
+  const cfg = Object.assign({}, chConfig(), patch);
+  clearTimeout(chPushTimer);
+  chPushTimer = setTimeout(async () => {
+    try {
+      state = await invoke("updateCrosshair", { crosshair: cfg });
+      renderCrosshair();
+    } catch (e) { notify(e.message, true, 6000); }
+  }, 90);
+}
+
+function renderCrosshair() {
+  const panel = document.getElementById("crosshair-panel");
+  if (panel.hidden) return;
+  const c = chConfig();
+  if (!c) return;
+
+  // 启用开关
+  const sw = document.getElementById("ch-enabled");
+  sw.setAttribute("aria-checked", c.enabled ? "true" : "false");
+
+
+  // 样式
+  const styleHost = document.getElementById("ch-style");
+  styleHost.innerHTML = "";
+  CH_STYLES.forEach(o => {
+    const b = document.createElement("button");
+    b.textContent = o.label;
+    b.setAttribute("aria-pressed", o.value === c.style ? "true" : "false");
+    b.onclick = () => pushCrosshair({ style: o.value });
+    styleHost.appendChild(b);
+  });
+
+  // 颜色
+  const colorHost = document.getElementById("ch-colors");
+  colorHost.innerHTML = "";
+  CH_COLORS.forEach(rgb => {
+    const b = document.createElement("button");
+    b.className = "ch-color";
+    b.style.background = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    const same = c.color[0] === rgb[0] && c.color[1] === rgb[1] && c.color[2] === rgb[2];
+    b.setAttribute("aria-pressed", same ? "true" : "false");
+    b.onclick = () => pushCrosshair({ color: rgb });
+    colorHost.appendChild(b);
+  });
+
+  // 滑杆
+  const bind = (id, key, suffix) => {
+    const el = document.getElementById(id);
+    const out = document.getElementById(id + "-val");
+    if (el.value !== String(c[key])) el.value = c[key];
+    out.textContent = c[key] + (suffix || "");
+    el.oninput = () => {
+      out.textContent = el.value + (suffix || "");
+      pushCrosshair({ [key]: Number(el.value) });
+    };
+  };
+  bind("ch-thickness", "thickness", "px");
+  bind("ch-gap", "gap", "px");
+  bind("ch-size", "size", "px");
+  bind("ch-opacity", "opacity", "%");
+  bind("ch-outline", "outline", "");
+
+  // 开关键
+  const keyBtn = document.getElementById("ch-key");
+  keyBtn.textContent = state.crosshairKey ? keyNameOf(state.crosshairKey) : "未设置";
+
+  renderCrosshairPreview(c);
+
+}
+
+// 准星颜色/形状的本地预览，和实际渲染保持同一套参数
+function renderCrosshairPreview(c) {
+  const host = document.getElementById("ch-preview");
+  const col = `rgb(${c.color[0]},${c.color[1]},${c.color[2]})`;
+  const t = c.thickness, g = c.gap, sz = c.size, o = c.outline;
+  const op = c.opacity / 100;
+  const span = (g + sz + o) * 2 + 4;
+  const cx = span / 2, cy = span / 2;
+
+  let shape = "";
+  const line = (x1, y1, x2, y2, w, color, alpha) =>
+    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${w}" opacity="${alpha}"/>`;
+
+  const drawOne = (color, alpha, extra) => {
+    const th = t + extra;
+    let out = "";
+    if (c.style === "CROSS") {
+      out += line(cx, cy - g - sz - extra, cx, cy - g, th, color, alpha);
+      out += line(cx, cy + g, cx, cy + g + sz + extra, th, color, alpha);
+      out += line(cx - g - sz - extra, cy, cx - g, cy, th, color, alpha);
+      out += line(cx + g, cy, cx + g + sz + extra, cy, th, color, alpha);
+    } else if (c.style === "TSHAPE") {
+      out += line(cx, cy - g - sz - extra, cx, cy - g, th, color, alpha);
+      out += line(cx - g - sz - extra, cy, cx - g, cy, th, color, alpha);
+      out += line(cx + g, cy, cx + g + sz + extra, cy, th, color, alpha);
+    } else if (c.style === "RING") {
+      out += `<circle cx="${cx}" cy="${cy}" r="${sz}" fill="none" stroke="${color}" stroke-width="${th}" opacity="${alpha}"/>`;
+    } else {
+      out += `<circle cx="${cx}" cy="${cy}" r="${th / 2 + extra / 2}" fill="${color}" opacity="${alpha}"/>`;
+    }
+    return out;
+  };
+
+  if (o > 0) shape += drawOne("#000", op * 0.7, o);
+  shape += drawOne(col, op, 0);
+
+  host.innerHTML = `<svg width="100%" height="100%" viewBox="0 0 ${span} ${span}"
+     preserveAspectRatio="xMidYMid meet">${shape}</svg>`;
+}
+
+function keyNameOf(scan) {
+  // 后端在 state 里给了 sourceName 的映射，但开关键是独立字段。
+  // 这里只能显示扫描码；要显示名字得再请求一次。
+  return "0x" + scan.toString(16).toUpperCase();
 }
 
 /* =============== 操作 =============== */
@@ -1924,6 +2364,59 @@ search.onkeydown = (e) => {
   if (e.key === "Escape") closeDialog();
 };
 
+/* ---- 准星面板事件 ---- */
+
+document.getElementById("ch-enabled").onclick = () => {
+  const c = chConfig();
+  if (!c) return;
+  pushCrosshair({ enabled: !c.enabled });
+};
+
+// 开关键捕获：和映射键位框用同一套思路
+document.getElementById("ch-key").onclick = () => beginKeyCapture();
+document.getElementById("ch-key").oncontextmenu = (e) => {
+  e.preventDefault();
+  invoke("setCrosshairKey", { scan: 0 }).then(s => { state = s; renderCrosshair(); })
+    .catch(err => notify(err.message, true, 6000));
+};
+
+let chCapturing = false;
+
+function beginKeyCapture() {
+  if (chCapturing) return;
+  chCapturing = true;
+  const btn = document.getElementById("ch-key");
+  btn.textContent = "按下按键";
+
+  const handler = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    cleanup();
+
+    if (e.key === "Escape") return;
+
+    invoke("resolveVirtualKey", { vk: e.keyCode })
+      .then(({ scan }) => invoke("setCrosshairKey", { scan }))
+      .then(s => { state = s; renderCrosshair(); })
+      .catch(() => notify("这个按键无法用作开关", true, 6000));
+  };
+
+  const onOutside = (e) => {
+    if (e.target.closest("#ch-key")) return;
+    cleanup();
+  };
+
+  function cleanup() {
+    chCapturing = false;
+    window.removeEventListener("keydown", handler, true);
+    document.removeEventListener("mousedown", onOutside, true);
+    renderCrosshair();
+  }
+
+  window.addEventListener("keydown", handler, true);
+  document.addEventListener("mousedown", onOutside, true);
+}
+
 document.getElementById("btn-add-mapping").onclick = async () => {
   if (!state) return;
   try {
@@ -1949,8 +2442,10 @@ setInterval(async () => {
     if (state.loadError) {
       notify(state.loadError, true, 20000);
     }
-    // ?dialog=1 直接打开新建弹窗，便于截图与调试
-    if (new URLSearchParams(location.search).get("dialog") === "1") openDialog();
+    // 调试参数：?dialog=1 打开新建弹窗，?view=crosshair 直接切到准星页
+    const q = new URLSearchParams(location.search);
+    if (q.get("dialog") === "1") openDialog();
+    if (q.get("view") === "crosshair") switchView("crosshair");
   } catch (err) {
     document.getElementById("status-text").textContent = "无法连接核心进程";
     notify(err.message, true);

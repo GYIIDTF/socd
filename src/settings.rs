@@ -87,10 +87,104 @@ pub struct Mapping {
     pub mode: MappingMode,
 }
 
+/// 准星样式。形状是固定几种，颜色和尺寸可调。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CrosshairStyle {
+    /// 四段短线，中心留空
+    Cross,
+    /// 单点
+    Dot,
+    /// 空心圆环
+    Ring,
+    /// T 形：上左右三向，无下
+    TShape,
+}
+
+impl CrosshairStyle {
+    pub fn as_settings_str(self) -> &'static str {
+        match self {
+            CrosshairStyle::Cross => "CROSS",
+            CrosshairStyle::Dot => "DOT",
+            CrosshairStyle::Ring => "RING",
+            CrosshairStyle::TShape => "TSHAPE",
+        }
+    }
+
+    pub fn from_settings_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "CROSS" => Some(CrosshairStyle::Cross),
+            "DOT" => Some(CrosshairStyle::Dot),
+            "RING" => Some(CrosshairStyle::Ring),
+            "TSHAPE" => Some(CrosshairStyle::TShape),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CrosshairStyle::Cross => "十字",
+            CrosshairStyle::Dot => "圆点",
+            CrosshairStyle::Ring => "圆环",
+            CrosshairStyle::TShape => "T 形",
+        }
+    }
+
+    pub fn all() -> [CrosshairStyle; 4] {
+        [
+            CrosshairStyle::Cross,
+            CrosshairStyle::Dot,
+            CrosshairStyle::Ring,
+            CrosshairStyle::TShape,
+        ]
+    }
+}
+
+/// 准星设置。挂在 profile 上，跟着前台程序自动切换。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Crosshair {
+    pub enabled: bool,
+    pub style: CrosshairStyle,
+    /// RGB，各 0-255
+    pub color: [u8; 3],
+    /// 线宽，像素
+    pub thickness: u32,
+    /// 中心到第一段的距离，像素
+    pub gap: u32,
+    /// 每段长度，像素（圆环模式下是半径）
+    pub size: u32,
+    /// 不透明度 0-100
+    pub opacity: u8,
+    /// 描边宽度，0 表示不加描边。深色背景上纯色准星容易看不见。
+    pub outline: u32,
+}
+
+impl Default for Crosshair {
+    fn default() -> Self {
+        Crosshair {
+            enabled: false,
+            style: CrosshairStyle::Cross,
+            color: [255, 255, 255],
+            thickness: 2,
+            gap: 4,
+            size: 10,
+            opacity: 100,
+            outline: 1,
+        }
+    }
+}
+
+impl Crosshair {
+    pub fn is_visible(&self) -> bool {
+        self.enabled && self.opacity > 0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
     pub program: String,
     pub mappings: Vec<Mapping>,
+    pub crosshair: Crosshair,
 }
 
 impl Profile {
@@ -98,6 +192,7 @@ impl Profile {
         Profile {
             program: program.into(),
             mappings: Vec::new(),
+            crosshair: Crosshair::default(),
         }
     }
 }
@@ -176,8 +271,51 @@ impl Settings {
                     "active" => is_active = value == "true",
                     "program" => profile.program = value.to_string(),
                     // 旧版本遗留字段：Windows 专用程序，忽略
-                    // 旧版本遗留字段：Windows 专用程序，忽略
                     "platform" => {}
+                    // 准星：一个字段一行，逐项覆盖默认值。
+                    // 旧配置没有这些行，保留默认值即可。
+                    "crosshair" => {
+                        profile.crosshair.enabled = value == "true";
+                    }
+                    "crosshair_style" => {
+                        if let Some(v) = CrosshairStyle::from_settings_str(value) {
+                            profile.crosshair.style = v;
+                        }
+                    }
+                    "crosshair_color" => {
+                        let parts: Vec<u8> = value
+                            .split_whitespace()
+                            .filter_map(|x| x.parse().ok())
+                            .collect();
+                        if parts.len() == 3 {
+                            profile.crosshair.color = [parts[0], parts[1], parts[2]];
+                        }
+                    }
+                    "crosshair_thickness" => {
+                        if let Ok(v) = value.parse::<u32>() {
+                            profile.crosshair.thickness = v.clamp(1, 20);
+                        }
+                    }
+                    "crosshair_gap" => {
+                        if let Ok(v) = value.parse::<u32>() {
+                            profile.crosshair.gap = v.clamp(0, 100);
+                        }
+                    }
+                    "crosshair_size" => {
+                        if let Ok(v) = value.parse::<u32>() {
+                            profile.crosshair.size = v.clamp(1, 100);
+                        }
+                    }
+                    "crosshair_opacity" => {
+                        if let Ok(v) = value.parse::<u8>() {
+                            profile.crosshair.opacity = v.min(100);
+                        }
+                    }
+                    "crosshair_outline" => {
+                        if let Ok(v) = value.parse::<u32>() {
+                            profile.crosshair.outline = v.min(10);
+                        }
+                    }
                     "mapping" => {
                         // `MODE source_code destination_code`
                         let parts: Vec<&str> = value.split_whitespace().collect();
