@@ -205,10 +205,10 @@ impl HotkeyMode {
     }
     pub fn label(self) -> &'static str {
         match self {
-            HotkeyMode::Toggle => "按一下切换",
+            HotkeyMode::Toggle => "切换",
             HotkeyMode::HoldToHide => "按住时隐藏",
             HotkeyMode::HoldToShow => "按住时显示",
-            HotkeyMode::Always => "一直显示",
+            HotkeyMode::Always => "显示",
         }
     }
     pub fn all() -> [HotkeyMode; 4] {

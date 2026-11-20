@@ -337,8 +337,9 @@ impl App {
                 crate::rawinput::HotkeySlot::Show => {
                     self.hotkey_held = ev.down;
                     match mode {
-                        // 一直显示：忽略显示快捷键
-                        crate::settings::HotkeyMode::Always => {}
+                        // 「切换」和「显示」两种模式只认启用键，显示键无效
+                        crate::settings::HotkeyMode::Toggle
+                        | crate::settings::HotkeyMode::Always => {}
                         crate::settings::HotkeyMode::Toggle => {
                             if ev.down {
                                 self.crosshair_armed = !self.crosshair_armed;
@@ -391,10 +392,12 @@ impl App {
         //   2. 显示开关打开（crosshair_armed，显示快捷键可翻，不写盘）
         //   3. 该配置对应的程序在前台
         //
-        // 「一直显示」模式跳过第 2 条——用户明确表示不用显示快捷键，
-        // 这时 crosshair_armed 可能是切模式前的旧值，不该挡住显示。
-        let armed = self.settings.hotkey_mode == crate::settings::HotkeyMode::Always
-            || self.crosshair_armed;
+        // 「切换」和「显示」两种模式不用显示快捷键——显示与否完全由启用键
+        // 控制。这时 crosshair_armed 可能是切模式前的旧值，不该挡住显示。
+        let armed = matches!(
+            self.settings.hotkey_mode,
+            crate::settings::HotkeyMode::Toggle | crate::settings::HotkeyMode::Always
+        ) || self.crosshair_armed;
 
         if !cfg.is_visible() || !armed || !matches {
             overlay.hide();

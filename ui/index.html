@@ -1683,6 +1683,37 @@
 
       <div class="crosshair-panel" id="crosshair-panel" hidden>
         <div class="ch-row">
+          <label class="ch-label">启用快捷键</label>
+          <div class="ch-field">
+            <button class="cap ch-key" id="ch-enable-key" data-side="key">未设置</button>
+            <button class="ch-clear" id="ch-enable-key-clear" title="清除快捷键" aria-label="清除快捷键">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            <span class="ch-hint">准星功能的总开关，会保存</span>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">显示快捷键</label>
+          <div class="ch-field">
+            <button class="cap ch-key" id="ch-key" data-side="key">未设置</button>
+            <button class="ch-clear" id="ch-key-clear" title="清除快捷键" aria-label="清除快捷键">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            <span class="ch-hint">总开关打开时，用它控制显不显示</span>
+          </div>
+        </div>
+
+        <div class="ch-row">
+          <label class="ch-label">触发方式</label>
+          <div class="ch-field">
+            <div class="ch-style" id="ch-hotkey-mode"></div>
+          </div>
+        </div>
+
+        <div class="ch-row">
           <label class="ch-label">样式</label>
           <div class="ch-field">
             <div class="ch-style" id="ch-style"></div>
@@ -1733,37 +1764,6 @@
           <div class="ch-field">
             <input type="range" id="ch-outline" min="0" max="5" step="1">
             <output id="ch-outline-val"></output>
-          </div>
-        </div>
-
-        <div class="ch-row">
-          <label class="ch-label">启用快捷键</label>
-          <div class="ch-field">
-            <button class="cap ch-key" id="ch-enable-key" data-side="key">未设置</button>
-            <button class="ch-clear" id="ch-enable-key-clear" title="清除快捷键" aria-label="清除快捷键">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                   stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-            </button>
-            <span class="ch-hint">准星功能的总开关，会保存</span>
-          </div>
-        </div>
-
-        <div class="ch-row">
-          <label class="ch-label">显示快捷键</label>
-          <div class="ch-field">
-            <button class="cap ch-key" id="ch-key" data-side="key">未设置</button>
-            <button class="ch-clear" id="ch-key-clear" title="清除快捷键" aria-label="清除快捷键">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                   stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-            </button>
-            <span class="ch-hint">总开关打开时，用它控制显不显示</span>
-          </div>
-        </div>
-
-        <div class="ch-row">
-          <label class="ch-label">触发方式</label>
-          <div class="ch-field">
-            <div class="ch-style" id="ch-hotkey-mode"></div>
           </div>
         </div>
 
@@ -1874,10 +1874,10 @@ const CH_STYLES = [
 // 常用准星色。刻意避开荧光绿/亮粉——那种颜色在某些游戏里
 // 容易和"外挂提示色"混为一谈。
 const HOTKEY_MODES = [
-  { value: "TOGGLE", label: "按一下切换" },
+  { value: "TOGGLE", label: "切换" },
   { value: "HOLD_TO_HIDE", label: "按住隐藏" },
   { value: "HOLD_TO_SHOW", label: "按住显示" },
-  { value: "ALWAYS", label: "一直显示" },
+  { value: "ALWAYS", label: "显示" },
 ];
 
 const MOUSE_KEY_NAMES = ["左键", "右键", "中键", "侧键 1", "侧键 2"];
