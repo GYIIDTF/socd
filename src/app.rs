@@ -412,29 +412,44 @@ impl App {
             self.crosshair_last = "隐藏：拿不到前台窗口客户区".into();
             return;
         };
-        let Some(monitor) = crate::crosshair::monitor_under_cursor() else {
+
+        // 定位基准是「前台窗口中心所在的显示器」，不是鼠标位置。
+        //
+        // 之前跟鼠标走，光标移到副屏时准星会跳过去，和游戏画面错位——
+        // 准星是给游戏画的，游戏在哪块屏，它就该在哪块屏。
+        let window_center = (
+            (client.0 + client.2) / 2,
+            (client.1 + client.3) / 2,
+        );
+        let Some(monitor) = crate::crosshair::monitor_containing(window_center) else {
             overlay.hide();
-            self.crosshair_last = "隐藏：拿不到鼠标所在显示器".into();
+            self.crosshair_last = "隐藏：拿不到前台窗口所在显示器".into();
             return;
         };
 
-        // 交集：窗口可能横跨两块屏，准星画在两者都覆盖的区域中心
-        let left = client.0.max(monitor.0);
-        let top = client.1.max(monitor.1);
-        let right = client.2.min(monitor.2);
-        let bottom = client.3.min(monitor.3);
-        if right <= left || bottom <= top {
-            // 窗口完全不在鼠标那块屏上
+        // 直接用显示器中心，不看窗口位置。
+        //
+        // 之前的做法是取「窗口 ∩ 显示器」的交集中心，窗口化运行时准星会
+        // 跟着窗口边框走，和玩家心里的"屏幕正中"对不上。准星要对的是
+        // 屏幕中心那一点，游戏窗口在哪儿无所谓。
+        //
+        // 窗口完全不在该显示器上时（比如拖到另一块屏），仍然隐藏——
+        // 否则准星会飘到一块没有游戏的屏幕上。
+        let overlaps = client.0 < monitor.2
+            && client.2 > monitor.0
+            && client.1 < monitor.3
+            && client.3 > monitor.1;
+        if !overlaps {
             overlay.hide();
             self.crosshair_last = format!(
-                "隐藏：窗口({},{},{},{}) 与显示器({},{},{},{}) 无交集",
+                "隐藏：窗口({},{},{},{}) 不在显示器({},{},{},{}) 内",
                 client.0, client.1, client.2, client.3,
                 monitor.0, monitor.1, monitor.2, monitor.3
             );
             return;
         }
 
-        self.crosshair_last = overlay.apply(&cfg, Some((left, top, right, bottom)));
+        self.crosshair_last = overlay.apply(&cfg, Some(monitor));
     }
 
     /// 立即按当前前台状态刷新一次准星。配置改动后调用。

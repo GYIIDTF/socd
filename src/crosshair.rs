@@ -488,19 +488,15 @@ fn draw(surface: &mut Surface, cfg: &Crosshair) {
     }
 }
 
-/// 当前鼠标所在显示器的完整矩形（左, 上, 右, 下）。
-pub fn monitor_under_cursor() -> Option<(i32, i32, i32, i32)> {
+/// 包含指定点的显示器矩形（左, 上, 右, 下）。
+pub fn monitor_containing(point: (i32, i32)) -> Option<(i32, i32, i32, i32)> {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
     unsafe {
-        let mut pt = POINT { x: 0, y: 0 };
-        if GetCursorPos(&mut pt) == 0 {
-            return None;
-        }
+        let pt = POINT { x: point.0, y: point.1 };
         let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
         if monitor.is_null() {
             return None;
