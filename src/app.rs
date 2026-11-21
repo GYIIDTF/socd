@@ -99,6 +99,15 @@ fn mode_options() -> Vec<ModeOption> {
         .collect()
 }
 
+/// 触发方式对应的初始显示状态。
+///
+/// 「按住时显示」下未按键就是隐藏，「按住时隐藏」下未按键就是显示；
+/// 「切换」不看这个值（它只认启用键）。启动和切模式都走这一处，
+/// 保证两边不会给出不一样的结果。
+fn initial_armed(mode: crate::settings::HotkeyMode) -> bool {
+    !matches!(mode, crate::settings::HotkeyMode::HoldToShow)
+}
+
 /// 草稿映射的标记值：源键为 0（Windows 没有对应的物理键）。
 pub const DRAFT_SCAN: ScanCode = 0;
 
@@ -187,6 +196,9 @@ impl App {
             }
         };
 
+        // 初始显示状态由触发方式决定：按住类模式从「没按住」开始，
+        // 否则「按住时显示」一启动就亮着，用户还没碰快捷键。
+        let hotkey_mode = settings.hotkey_mode;
         let mut app = App {
             settings,
             path,
@@ -196,7 +208,7 @@ impl App {
             first_run,
             load_error,
             overlay: crate::crosshair::Overlay::new(),
-            crosshair_armed: true,
+            crosshair_armed: initial_armed(hotkey_mode),
             hotkey_held: false,
             crosshair_last: String::new(),
         };
@@ -207,8 +219,13 @@ impl App {
 
         // 按已保存的配置注册准星快捷键。不注册的话重启后快捷键失效，
         // 用户得重新设一次——而他不会想到要这么做。
-        if let (Some(overlay), Some(hk)) = (app.overlay.as_ref(), app.settings.hotkey) {
-            overlay.set_hotkey(Some(hk), app.settings.enable_hotkey);
+        //
+        // 两个快捷键各自独立：只设了启用键（不用显示键）也是合法用法，
+        // 所以判断条件是「任一非空」，不能只看显示键。
+        if let Some(overlay) = app.overlay.as_ref() {
+            if app.settings.hotkey.is_some() || app.settings.enable_hotkey.is_some() {
+                overlay.set_hotkey(app.settings.hotkey, app.settings.enable_hotkey);
+            }
         }
 
         match win::install(app.hook.clone()) {
@@ -339,11 +356,6 @@ impl App {
                     match mode {
                         // 「切换」模式只认启用键，显示键无效
                         crate::settings::HotkeyMode::Toggle => {}
-                        crate::settings::HotkeyMode::Toggle => {
-                            if ev.down {
-                                self.crosshair_armed = !self.crosshair_armed;
-                            }
-                        }
                         crate::settings::HotkeyMode::HoldToHide => {
                             self.crosshair_armed = !ev.down;
                         }
@@ -407,10 +419,18 @@ impl App {
             return;
         }
 
-        let Some(client) = crate::crosshair::foreground_client_rect() else {
-            overlay.hide();
-            self.crosshair_last = "隐藏：拿不到前台窗口客户区".into();
-            return;
+        // 全屏游戏可能让 GetClientRect 拿不到有效值，这里把原始数据也记下来，
+        // 出问题时能从界面看出卡在哪一步。
+        let client = match crate::crosshair::foreground_client_rect() {
+            Some(c) => c,
+            None => {
+                overlay.hide();
+                self.crosshair_last = format!(
+                    "隐藏：拿不到前台窗口客户区（hwnd={:#x}）",
+                    crate::crosshair::foreground_hwnd()
+                );
+                return;
+            }
         };
 
         // 定位基准是「前台窗口中心所在的显示器」，不是鼠标位置。
@@ -421,35 +441,27 @@ impl App {
             (client.0 + client.2) / 2,
             (client.1 + client.3) / 2,
         );
-        let Some(monitor) = crate::crosshair::monitor_containing(window_center) else {
+        let Some(_monitor) = crate::crosshair::monitor_containing(window_center) else {
             overlay.hide();
             self.crosshair_last = "隐藏：拿不到前台窗口所在显示器".into();
             return;
         };
 
-        // 直接用显示器中心，不看窗口位置。
+        // 直接用客户区矩形，不做「与显示器取交集」。
         //
-        // 之前的做法是取「窗口 ∩ 显示器」的交集中心，窗口化运行时准星会
-        // 跟着窗口边框走，和玩家心里的"屏幕正中"对不上。准星要对的是
-        // 屏幕中心那一点，游戏窗口在哪儿无所谓。
-        //
-        // 窗口完全不在该显示器上时（比如拖到另一块屏），仍然隐藏——
-        // 否则准星会飘到一块没有游戏的屏幕上。
-        let overlaps = client.0 < monitor.2
-            && client.2 > monitor.0
-            && client.1 < monitor.3
-            && client.3 > monitor.1;
-        if !overlaps {
+        // 取交集看着能防止准星画到别的屏上，实际会改掉中心点：窗口跨屏时
+        // 交集比窗口窄，中心随之偏移，准星就不在画面正中。而且这个中心
+        // 已经在上面确认过落在某块显示器里，画出来本来就不会跑到别处。
+        if client.2 <= client.0 || client.3 <= client.1 {
             overlay.hide();
             self.crosshair_last = format!(
-                "隐藏：窗口({},{},{},{}) 不在显示器({},{},{},{}) 内",
-                client.0, client.1, client.2, client.3,
-                monitor.0, monitor.1, monitor.2, monitor.3
+                "隐藏：客户区尺寸无效 ({},{},{},{})",
+                client.0, client.1, client.2, client.3
             );
             return;
         }
 
-        self.crosshair_last = overlay.apply(&cfg, Some(monitor));
+        self.crosshair_last = overlay.apply(&cfg, Some(client));
     }
 
     /// 立即按当前前台状态刷新一次准星。配置改动后调用。
@@ -470,20 +482,6 @@ impl App {
             })
             .unwrap_or(false);
         self.refresh_crosshair(focused);
-    }
-
-    /// 切换准星总开关。返回切换后的状态。
-    pub fn toggle_crosshair(&mut self) -> bool {
-        self.crosshair_armed = !self.crosshair_armed;
-        let enabled = self.armed.is_some()
-            || self
-                .settings
-                .profiles
-                .get(self.settings.active_profile_index)
-                .map(|p| p.program.is_empty())
-                .unwrap_or(true);
-        self.refresh_crosshair(enabled);
-        self.crosshair_armed
     }
 
     pub fn drain_events(&self) -> Vec<Value> {
@@ -864,12 +862,21 @@ impl App {
             // ---- 准星 ----
 
             "updateCrosshair" => {
-                let idx = self
-                    .settings
-                    .active_profile_index
+                // 界面会带上改动发起时的配置下标。拖动滑杆后 90ms 防抖期间
+                // 用户可能已经切到别的配置标签——按"当前选中"写会把这边的
+                // 参数写进另一份配置。带上下标就不会串。
+                let idx = payload
+                    .get("profileIndex")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as usize)
+                    .unwrap_or(self.settings.active_profile_index)
                     .min(self.settings.profiles.len().saturating_sub(1));
                 let payload_cfg = payload.get("crosshair").cloned().unwrap_or(Value::Null);
-                let profile = self.active_profile_mut()?;
+                let profile = self
+                    .settings
+                    .profiles
+                    .get_mut(idx)
+                    .ok_or("这个配置文件不存在，可能已经被删除了")?;
                 let mut c = profile.crosshair;
 
                 if let Some(v) = payload_cfg.get("enabled").and_then(Value::as_bool) {
@@ -890,19 +897,30 @@ impl App {
                     }
                 }
                 if let Some(v) = payload_cfg.get("thickness").and_then(Value::as_u64) {
-                    c.thickness = (v as u32).clamp(1, 20);
+                    c.thickness = v.clamp(1, 20) as u32;
                 }
                 if let Some(v) = payload_cfg.get("gap").and_then(Value::as_u64) {
-                    c.gap = (v as u32).min(100);
+                    c.gap = v.min(100) as u32;
                 }
                 if let Some(v) = payload_cfg.get("size").and_then(Value::as_u64) {
-                    c.size = (v as u32).clamp(1, 100);
+                    c.size = v.clamp(1, 100) as u32;
                 }
                 if let Some(v) = payload_cfg.get("opacity").and_then(Value::as_u64) {
-                    c.opacity = (v as u8).min(100);
+                    // 先夹到 0-100 再转 u8：`v as u8` 会截断，传 300 会变成 44，
+                    // 用户看到的却是完全不相干的透明度。
+                    c.opacity = v.min(100) as u8;
                 }
                 if let Some(v) = payload_cfg.get("outline").and_then(Value::as_u64) {
-                    c.outline = (v as u32).min(10);
+                    c.outline = v.min(10) as u32;
+                }
+                if let Some(v) = payload_cfg.get("outline_opacity").and_then(Value::as_u64) {
+                    c.outline_opacity = v.min(100) as u8;
+                }
+                if let Some(v) = payload_cfg.get("center_dot").and_then(Value::as_bool) {
+                    c.center_dot = v;
+                }
+                if let Some(v) = payload_cfg.get("center_dot_size").and_then(Value::as_u64) {
+                    c.center_dot_size = v.clamp(1, 20) as u32;
                 }
                 if let Some(v) = payload_cfg.get("offset_x").and_then(Value::as_i64) {
                     c.offset_x = (v as i32).clamp(-4000, 4000);
@@ -911,11 +929,9 @@ impl App {
                     c.offset_y = (v as i32).clamp(-4000, 4000);
                 }
 
-                {
-                    let profile = self.active_profile_mut()?;
+                if let Some(profile) = self.settings.profiles.get_mut(idx) {
                     profile.crosshair = c;
                 }
-                let _ = idx;
                 self.save()?;
                 self.refresh_now();
                 Ok(self.state()?)
@@ -955,8 +971,14 @@ impl App {
                     );
                 }
                 self.save()?;
-                // 换了快捷键，按住状态从零开始
+                // 换了快捷键，按住状态从零开始。
+                // 按住类模式还要一并复位显示状态：换键前若正按着（准星亮着），
+                // 松开事件不会再到——旧键已不再监听——准星会一直留着。
                 self.hotkey_held = false;
+                if self.settings.hotkey_mode != crate::settings::HotkeyMode::Toggle {
+                    self.crosshair_armed = initial_armed(self.settings.hotkey_mode);
+                }
+                self.refresh_now();
                 Ok(self.state()?)
             }
 
@@ -970,20 +992,22 @@ impl App {
                 // 切模式时按新语义重置显示状态：
                 // 按住类从"没按住"开始，Toggle 保持当前值。
                 self.hotkey_held = false;
-                if mode == crate::settings::HotkeyMode::HoldToShow {
-                    self.crosshair_armed = false;
-                } else if mode == crate::settings::HotkeyMode::HoldToHide {
-                    self.crosshair_armed = true;
+                if mode != crate::settings::HotkeyMode::Toggle {
+                    self.crosshair_armed = initial_armed(mode);
                 }
                 self.save()?;
                 self.refresh_now();
                 Ok(self.state()?)
             }
 
-            "toggleCrosshair" => {
-                self.crosshair_armed = !self.crosshair_armed;
-                self.refresh_now();
+            "setFullscreenCompatibility" => {
+                // 已移除的命令，保留空实现，避免旧页面缓存发来的请求报错。
                 Ok(self.state()?)
+            }
+
+            "relaunchElevated" => {
+                // 已无需要管理员权限的功能，保留空实现兼容旧页面。
+                Ok(json!({ "launched": false }))
             }
 
             "updateMappingMode" => {

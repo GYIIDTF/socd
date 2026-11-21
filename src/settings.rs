@@ -121,24 +121,6 @@ impl CrosshairStyle {
             _ => None,
         }
     }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            CrosshairStyle::Cross => "十字",
-            CrosshairStyle::Dot => "圆点",
-            CrosshairStyle::Ring => "圆环",
-            CrosshairStyle::TShape => "T 形",
-        }
-    }
-
-    pub fn all() -> [CrosshairStyle; 4] {
-        [
-            CrosshairStyle::Cross,
-            CrosshairStyle::Dot,
-            CrosshairStyle::Ring,
-            CrosshairStyle::TShape,
-        ]
-    }
 }
 
 /// 快捷键来源：键盘还是鼠标。
@@ -202,16 +184,6 @@ impl HotkeyMode {
             _ => None,
         }
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            HotkeyMode::Toggle => "切换",
-            HotkeyMode::HoldToHide => "按住时隐藏",
-            HotkeyMode::HoldToShow => "按住时显示",
-        }
-    }
-    pub fn all() -> [HotkeyMode; 3] {
-        [HotkeyMode::Toggle, HotkeyMode::HoldToHide, HotkeyMode::HoldToShow]
-    }
 }
 
 /// 准星设置。挂在 profile 上，跟着前台程序自动切换。
@@ -231,6 +203,12 @@ pub struct Crosshair {
     pub opacity: u8,
     /// 描边宽度，0 表示不加描边。深色背景上纯色准星容易看不见。
     pub outline: u32,
+    /// 描边不透明度 0-100。独立于主体，方便在亮背景上把描边压淡。
+    pub outline_opacity: u8,
+    /// 中心点。和主体分开控制——FPS 里常关掉主体只留一个点。
+    pub center_dot: bool,
+    /// 中心点直径，像素
+    pub center_dot_size: u32,
     /// 相对显示器中心的偏移，物理像素。正 X 向右，正 Y 向下。
     pub offset_x: i32,
     pub offset_y: i32,
@@ -249,6 +227,9 @@ impl Default for Crosshair {
             size: 10,
             opacity: 100,
             outline: 1,
+            outline_opacity: 70,
+            center_dot: false,
+            center_dot_size: 2,
             offset_x: 0,
             offset_y: 0,
         }
@@ -440,6 +421,19 @@ impl Settings {
                             profile.crosshair.outline = v.min(10);
                         }
                     }
+                    "crosshair_outline_opacity" => {
+                        if let Ok(v) = value.parse::<u8>() {
+                            profile.crosshair.outline_opacity = v.min(100);
+                        }
+                    }
+                    "crosshair_center_dot" => {
+                        profile.crosshair.center_dot = value == "true";
+                    }
+                    "crosshair_center_dot_size" => {
+                        if let Ok(v) = value.parse::<u32>() {
+                            profile.crosshair.center_dot_size = v.clamp(1, 20);
+                        }
+                    }
                     "crosshair_offset_x" => {
                         if let Ok(v) = value.parse::<i32>() {
                             profile.crosshair.offset_x = v.clamp(-4000, 4000);
@@ -509,8 +503,7 @@ impl Settings {
         }
         if let Some(hk) = self.enable_hotkey {
             out.push_str(&format!(
-                "enable_hotkey: {} {}
-",
+                "enable_hotkey: {} {}\n",
                 hk.kind.as_settings_str(),
                 hk.code
             ));
@@ -572,6 +565,21 @@ impl Settings {
                 }
                 if c.outline != d.outline {
                     out.push_str(&format!("crosshair_outline: {}\n", c.outline));
+                }
+                if c.outline_opacity != d.outline_opacity {
+                    out.push_str(&format!(
+                        "crosshair_outline_opacity: {}\n",
+                        c.outline_opacity
+                    ));
+                }
+                if c.center_dot != d.center_dot {
+                    out.push_str(&format!("crosshair_center_dot: {}\n", c.center_dot));
+                }
+                if c.center_dot_size != d.center_dot_size {
+                    out.push_str(&format!(
+                        "crosshair_center_dot_size: {}\n",
+                        c.center_dot_size
+                    ));
                 }
                 if c.offset_x != d.offset_x {
                     out.push_str(&format!("crosshair_offset_x: {}\n", c.offset_x));

@@ -809,6 +809,13 @@
     flex: none;
   }
 
+  /* 中心点的开关和滑杆在同一行 */
+  .ch-field .switch { flex: none; }
+  .ch-field input[type="range"]:disabled {
+    opacity: .4;
+    cursor: not-allowed;
+  }
+
   .ch-field input[type="number"] {
     font: inherit;
     font-size: 12.5px;
@@ -891,7 +898,6 @@
     display: grid;
     place-items: center;
   }
-
 
   .section-title {
 
@@ -1757,6 +1763,17 @@
         </div>
 
         <div class="ch-row">
+          <label class="ch-label">中心点</label>
+          <div class="ch-field">
+            <button class="switch" id="ch-center-dot" role="switch" aria-checked="false">
+              <span class="knob"></span>
+            </button>
+            <input type="range" id="ch-center-dot-size" min="1" max="20" step="1">
+            <output id="ch-center-dot-size-val"></output>
+          </div>
+        </div>
+
+        <div class="ch-row">
           <label class="ch-label">线宽</label>
           <div class="ch-field">
             <input type="range" id="ch-thickness" min="1" max="10" step="1">
@@ -1797,6 +1814,16 @@
         </div>
 
         <div class="ch-row">
+          <label class="ch-label">描边不透明度</label>
+          <div class="ch-field">
+            <input type="range" id="ch-outline-opacity" min="0" max="100" step="5">
+            <output id="ch-outline-opacity-val"></output>
+          </div>
+        </div>
+
+        </div>
+
+        <div class="ch-row">
           <label class="ch-label">位置偏移</label>
           <div class="ch-field">
             <span class="ch-axis">X</span>
@@ -1809,6 +1836,7 @@
         <div class="ch-preview-wrap">
           <div class="ch-preview" id="ch-preview"></div>
         </div>
+
       </div>
     </main>
   </div>
@@ -2170,10 +2198,13 @@ function pushCrosshair(patch) {
   renderCrosshair();
 
   const cfg = Object.assign({}, chConfig(), patch);
+  // 记住发起改动时的配置下标：下面的请求要等 90ms 才发，期间用户
+  // 可能已经切到别的标签，后端按"当前选中"写就会串到另一份配置。
+  const profileIndex = state.activeIndex;
   clearTimeout(chPushTimer);
   chPushTimer = setTimeout(async () => {
     try {
-      state = await invoke("updateCrosshair", { crosshair: cfg });
+      state = await invoke("updateCrosshair", { crosshair: cfg, profileIndex });
     } catch (e) {
       notify(e.message, true, 6000);
       // 失败就回滚到后端真实状态
@@ -2242,6 +2273,15 @@ function renderCrosshair() {
   bind("ch-size", "size", "px");
   bind("ch-opacity", "opacity", "%");
   bind("ch-outline", "outline", "");
+  bind("ch-outline-opacity", "outline_opacity", "%");
+  bind("ch-center-dot-size", "center_dot_size", "px");
+
+  // 中心点开关
+  const dotBtn = document.getElementById("ch-center-dot");
+  dotBtn.setAttribute("aria-checked", c.center_dot ? "true" : "false");
+  dotBtn.onclick = () => pushCrosshair({ center_dot: !c.center_dot });
+  // 关掉时大小滑杆没意义，置灰
+  document.getElementById("ch-center-dot-size").disabled = !c.center_dot;
 
   // 触发方式
   const modeHost = document.getElementById("ch-hotkey-mode");
@@ -2340,8 +2380,15 @@ function renderCrosshairPreview(c) {
   };
 
   let shape = "";
-  if (o > 0) shape += drawOne("#000", op * 0.7, o);
+  // 描边不透明度独立于主体，和后端 draw() 保持一致
+  if (o > 0) shape += drawOne("#000", op * (c.outline_opacity / 100), o);
   shape += drawOne(col, op, 0);
+
+  // 中心点叠在最上层，颜色取主体色
+  if (c.center_dot) {
+    shape += `<circle cx="${cx}" cy="${cy}" r="${c.center_dot_size / 2}" `
+           + `fill="${col}" opacity="${op}"/>`;
+  }
 
   host.innerHTML = `<svg width="100%" height="100%" viewBox="0 0 ${span} ${span}"
      preserveAspectRatio="xMidYMid meet">${shape}</svg>`;

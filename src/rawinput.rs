@@ -46,6 +46,10 @@ pub const MOUSE_MIDDLE: u16 = 2;
 pub const MOUSE_SIDE1: u16 = 3;
 pub const MOUSE_SIDE2: u16 = 4;
 
+/// WM_INPUT 缓冲区大小，按 u64 计。104 字节的 RAWINPUT 结构最坏情况下
+/// 也就 1024 字节，这里留够余量。用 u64 数组是为了保证 8 字节对齐。
+const RAW_BUF_WORDS: usize = 128;
+
 /// 按键状态变化，交给主线程处理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyEvent {
@@ -86,6 +90,8 @@ pub struct RawInputState {
     pub last_code: AtomicU16,
     pub last_down: AtomicBool,
     pub last_slot: std::sync::atomic::AtomicU8,
+    /// 上次事件是键盘还是鼠标（0=键盘 1=鼠标）
+    pub last_kind: std::sync::atomic::AtomicU8,
 }
 
 impl Default for RawInputState {
@@ -102,6 +108,7 @@ impl Default for RawInputState {
             last_code: AtomicU16::new(0),
             last_down: AtomicBool::new(false),
             last_slot: std::sync::atomic::AtomicU8::new(255),
+            last_kind: std::sync::atomic::AtomicU8::new(255),
         }
     }
 }
@@ -205,21 +212,15 @@ pub fn handle_wm_input(lparam: LPARAM, state: &RawInputState) {
         None
     };
 
-    let mut size: u32 = 0;
-    unsafe {
-        GetRawInputData(
-            lparam as HRAWINPUT,
-            RID_INPUT,
-            std::ptr::null_mut(),
-            &mut size,
-            std::mem::size_of::<RAWINPUTHEADER>() as u32,
-        );
-    }
-    if size == 0 || size > 1024 {
-        return;
-    }
-
-    let mut buf = [0u8; 1024];
+    // 一次调用取数据：先查询长度再取，是两次跨内核调用。鼠标注册后会收到
+    // 每一次移动事件（高回报率鼠标一秒上千次），能省一半就省一半。
+    // 1024 字节足够放下键盘和鼠标的 RAWINPUT 结构。
+    //
+    // 缓冲区必须按 RAWINPUT 的对齐要求分配。`[u8; N]` 只有 1 字节对齐，
+    // 强转成 `&RAWINPUT` 后读 64 位字段就是未对齐访问——debug 下直接
+    // panic（misaligned pointer dereference），release 下是未定义行为。
+    let mut buf = [0u64; RAW_BUF_WORDS];
+    let mut size: u32 = (RAW_BUF_WORDS * 8) as u32;
     let read = unsafe {
         GetRawInputData(
             lparam as HRAWINPUT,
@@ -234,7 +235,7 @@ pub fn handle_wm_input(lparam: LPARAM, state: &RawInputState) {
     }
 
     let raw = unsafe { &*(buf.as_ptr() as *const RAWINPUT) };
-    let kind = unsafe { raw.header.dwType };
+    let kind = raw.header.dwType;
 
     let event = if kind == RIM_TYPEKEYBOARD {
         let kb = unsafe { &raw.data.keyboard };
@@ -280,16 +281,20 @@ pub fn handle_wm_input(lparam: LPARAM, state: &RawInputState) {
         return;
     };
 
-    // 有些设备会重复上报同一状态，过滤掉
+    // 有些设备会重复上报同一状态，过滤掉。
+    // 连同「键盘还是鼠标」一起比较——键盘扫描码和鼠标键编号是两套编号，
+    // 鼠标侧键 1（3）和键盘上的某个扫描码会撞上，只比键码会误判。
     let same = state.last_code.load(Ordering::Relaxed) == event.code
         && state.last_down.load(Ordering::Relaxed) == event.down
-        && state.last_slot.load(Ordering::Relaxed) == event.slot as u8;
+        && state.last_slot.load(Ordering::Relaxed) == event.slot as u8
+        && state.last_kind.load(Ordering::Relaxed) == event.kind as u8;
     if same {
         return;
     }
     state.last_code.store(event.code, Ordering::Relaxed);
     state.last_down.store(event.down, Ordering::Relaxed);
     state.last_slot.store(event.slot as u8, Ordering::Relaxed);
+    state.last_kind.store(event.kind as u8, Ordering::Relaxed);
 
     if let Ok(mut q) = state.events.lock() {
         if q.len() < 32 {

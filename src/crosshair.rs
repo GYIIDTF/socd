@@ -18,9 +18,10 @@ use windows_sys::Win32::Graphics::Gdi::{
     HDC, HGDIOBJ,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, IsWindow, RegisterClassW, ShowWindow,
-    UpdateLayeredWindow, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SetWindowPos, ShowWindow,
+    UpdateLayeredWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
+    SW_SHOWNOACTIVATE, ULW_ALPHA, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::settings::{Crosshair, CrosshairStyle};
@@ -39,39 +40,6 @@ pub fn enable_per_monitor_dpi() {
     unsafe {
         // Win10 1703+ 才有；失败说明系统更旧，保持默认即可
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    }
-}
-
-/// 当前显示器的缩放比例（1.0 = 96 DPI）。
-///
-/// `MonitorFromPoint` + `GetDpiForMonitor` 拿到的是该显示器自己的 DPI，
-/// 不是主屏的——这是"鼠标在哪块屏就按哪块的缩放"的关键。
-pub fn scale_for_monitor(point: POINT) -> f32 {
-    use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
-    use windows_sys::Win32::UI::HiDpi::GetDpiForMonitor;
-    use windows_sys::Win32::UI::HiDpi::MDT_EFFECTIVE_DPI;
-
-    unsafe {
-        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
-        if monitor.is_null() {
-            return 1.0;
-        }
-        let mut info: MONITORINFO = std::mem::zeroed();
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if GetMonitorInfoW(monitor, &mut info) == 0 {
-            return 1.0;
-        }
-
-        let mut dpi_x: u32 = 96;
-        let mut dpi_y: u32 = 96;
-        if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) != 0 {
-            return 1.0;
-        }
-        // 进程已是 per-monitor-v2 感知时这个值就是真实 DPI；
-        // 无论如何都按它算比例，避免"主屏 100%、副屏 150%"时错位。
-        dpi_x as f32 / 96.0
     }
 }
 
@@ -173,7 +141,6 @@ impl Surface {
         let src_b = color[2] as u32 * sa / 255;
         let src_g = color[1] as u32 * sa / 255;
         let src_r = color[0] as u32 * sa / 255;
-        let _ = &dst;
 
         // 预乘格式下：out = src + dst * (1 - src_a)
         let dst_a = (dst >> 24) & 0xFF;
@@ -204,6 +171,15 @@ pub struct Overlay {
     hwnd: HWND,
     surface: Mutex<Option<Surface>>,
     visible: AtomicBool,
+    /// 上一次真正画进位图的配置、画布尺寸和屏幕位置。
+    ///
+    /// 前台轮询每 120ms 调一次 `apply`，但配置和形状通常几分钟不变。
+    /// 没有这个记录的话，每一轮都会把几万像素重新算一遍再整个上传，
+    /// 白白占着 CPU 和 GPU 带宽。
+    drawn: Mutex<Option<(Crosshair, i32, i32, i32)>>,
+    /// 上一次重新置顶的时间。游戏重新置顶是低频事件，没必要每 120ms
+    /// 都调一次 `SetWindowPos`（它会让 DWM 重新做一次层级合成）。
+    last_topmost: Mutex<Option<std::time::Instant>>,
     /// Raw Input 快捷键监听
     pub raw: crate::rawinput::RawInputState,
 }
@@ -259,6 +235,8 @@ impl Overlay {
                 hwnd,
                 surface: Mutex::new(None),
                 visible: AtomicBool::new(false),
+                drawn: Mutex::new(None),
+                last_topmost: Mutex::new(None),
                 raw: crate::rawinput::RawInputState::default(),
             });
             if let Ok(mut slot) = OVERLAY_RAW.lock() {
@@ -286,8 +264,46 @@ impl Overlay {
         //
         // 用奇数尺寸：中心像素是 canvas/2 的整数部分，奇数时四个方向
         // 到边缘的距离完全相等，画出来才是对称的。偶数会在某一侧多一格。
-        let extent = (cfg.gap + cfg.size + cfg.outline + cfg.thickness + 2) as i32;
+        //
+        // 中心点可能比四段线更靠里也可能更大，所以画布至少要有中心点
+        // 那么大，否则会被裁掉一角。
+        let shape_extent = (cfg.gap + cfg.size + cfg.outline + cfg.thickness + 2) as i32;
+        let dot_extent = if cfg.center_dot {
+            (cfg.center_dot_size + 2) as i32
+        } else {
+            0
+        };
+        let extent = shape_extent.max(dot_extent);
         let canvas: i32 = (extent * 2 + 1).max(9);
+
+        // 准星放在窗口（或屏幕）正中，再加上用户设定的物理像素偏移。
+        //
+        // 偏移量直接当物理像素用，不做缩放换算。
+        //
+        // 进程声明了 per-monitor-v2 DPI 感知，`GetClientRect` /
+        // `ClientToScreen` 拿到的已经是物理像素，偏移量也是按物理像素定义——
+        // 两者单位一致，直接相加即可。
+        //
+        // 之前这里除以了显示器缩放比例（`offset / scale`），在 125% 缩放下
+        // 设 100px 实际只移动 80px。实测确认后去掉。
+        let cx = left + width / 2 - canvas / 2 + cfg.offset_x;
+        let cy = top + height / 2 - canvas / 2 + cfg.offset_y;
+
+        // 上一轮画过什么。前台轮询每 120ms 调一次本函数，而配置和形状
+        // 通常几分钟不变——没有这份记录的话，每一轮都要把几万像素重新
+        // 算一遍再整个上传，白白占 CPU 和 D3D 合成带宽。
+        let last = self.drawn.lock().ok().and_then(|s| *s);
+
+        if self.visible.load(Ordering::Relaxed) {
+            if let Some((drawn_cfg, drawn_canvas, drawn_x, drawn_y)) = last {
+                if drawn_cfg == *cfg && drawn_canvas == canvas && (drawn_x, drawn_y) == (cx, cy) {
+                    // 位置没变不代表层级没变：游戏切全屏时会把自己重新置顶，
+                    // 压在准星上面。这里顺手把层级再抢回来。
+                    self.reassert_topmost();
+                    return format!("未变 ({cx},{cy}) {canvas}x{canvas}");
+                }
+            }
+        }
 
         let mut guard = self.surface.lock().unwrap();
         let need_new = match guard.as_ref() {
@@ -302,27 +318,27 @@ impl Overlay {
             return "跳过：Surface 创建失败".to_string();
         };
 
-        draw(surface, cfg);
-
-        // 准星放在窗口（或屏幕）正中，再加上用户设定的物理像素偏移。
-        //
-        // 偏移量按"物理像素"定义，但窗口坐标是逻辑像素（DPI 缩放后）。
-        // 除以缩放比例才是屏幕上的真实位移——150% 缩放下偏移 100px
-        // 应该是 100 物理像素，不是 100 逻辑像素（那会是 150 物理像素）。
-        let center = POINT { x: left + width / 2, y: top + height / 2 };
-        let scale = scale_for_monitor(center).max(0.5);
-        let ox = (cfg.offset_x as f32 / scale).round() as i32;
-        let oy = (cfg.offset_y as f32 / scale).round() as i32;
-
-        let cx = center.x - canvas / 2 + ox;
-        let cy = center.y - canvas / 2 + oy;
+        // 画布尺寸变了必须重画（旧位图已丢弃）；配置变了也要重画。
+        // 只是窗口位置变了的话，位图内容仍然有效。
+        let needs_paint = need_new
+            || match last {
+                Some((drawn_cfg, drawn_canvas, _, _)) => {
+                    drawn_cfg != *cfg || drawn_canvas != canvas
+                }
+                None => true,
+            };
+        if needs_paint {
+            draw(surface, cfg);
+        }
 
         let size = SIZE { cx: canvas, cy: canvas };
         let src = POINT { x: 0, y: 0 };
         let dst = POINT { x: cx, y: cy };
 
         unsafe {
-            surface.flush_to_dc();
+            if needs_paint {
+                surface.flush_to_dc();
+            }
             // ULW_ALPHA 必须给 BLENDFUNCTION，传 null 会直接失败
             // （UpdateLayeredWindow 返回 0，GetLastError 是 ERROR_GEN_FAILURE）。
             let blend = BLENDFUNCTION {
@@ -348,6 +364,28 @@ impl Overlay {
             }
             if !self.visible.swap(true, Ordering::Relaxed) {
                 ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+                // 每次显示后都用完整参数重新置顶一次，而不是只动层级。
+                //
+                // 参考实现在创建窗口后立刻做的是：
+                //   SetWindowPos(hwnd, HWND_TOPMOST, cx, cy, w, h, SWP_NOACTIVATE)
+                // 位置和尺寸都明确给出来。只调 ulw 改位置、再单独摞层级，
+                // 在某些合成阶段（尤其是刚从独占全屏切回）会留下一帧
+                // 旧位置。这里保持和它一样的调用形态。
+                SetWindowPos(
+                    self.hwnd,
+                    HWND_TOPMOST,
+                    cx,
+                    cy,
+                    canvas,
+                    canvas,
+                    SWP_NOACTIVATE,
+                );
+                if let Ok(mut last) = self.last_topmost.lock() {
+                    *last = Some(std::time::Instant::now());
+                }
+            }
+            if let Ok(mut state) = self.drawn.lock() {
+                *state = Some((*cfg, canvas, cx, cy));
             }
         }
         format!("绘制于 ({cx},{cy}) {canvas}x{canvas}")
@@ -356,6 +394,53 @@ impl Overlay {
     pub fn hide(&self) {
         if self.visible.swap(false, Ordering::Relaxed) {
             unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+        }
+        // 下次显示必须重新上传位图（窗口被隐藏过，内容不保证还在），
+        // 所以清掉这份缓存。置顶节奏也一并重置：重新显示时要立刻抢层级。
+        if let Ok(mut state) = self.drawn.lock() {
+            *state = None;
+        }
+        if let Ok(mut last) = self.last_topmost.lock() {
+            *last = None;
+        }
+    }
+
+    /// 把窗口重新提到置顶层级的最上面。
+    ///
+    /// `WS_EX_TOPMOST` 只保证「在所有非置顶窗口之上」，不保证「在所有置顶
+    /// 窗口之上」。游戏进入全屏时会自己调 `SetWindowPos(HWND_TOPMOST)`
+    /// 把自己提到最前——同为置顶窗口，后设置的在上层，准星就被压到游戏
+    /// 画面下面去了。这是「窗口化看得见、全屏看不见」最常见的原因。
+    ///
+    /// 在显示期间定期重新置顶把顺序抢回来。两秒一次足够：游戏切全屏是
+    /// 低频事件，而每次调用都会让 DWM 重排一次层级，没必要更频繁。
+    /// `SWP_NOACTIVATE` 保证不抢焦点。
+    pub fn reassert_topmost(&self) {
+        if !self.visible.load(Ordering::Relaxed) {
+            return;
+        }
+        {
+            let Ok(mut last) = self.last_topmost.lock() else {
+                return;
+            };
+            let now = std::time::Instant::now();
+            if let Some(prev) = *last {
+                if now.duration_since(prev) < std::time::Duration::from_secs(2) {
+                    return;
+                }
+            }
+            *last = Some(now);
+        }
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -376,10 +461,6 @@ impl Overlay {
     /// 取走待处理的开关键事件。
     pub fn drain_hotkey_events(&self) -> Vec<crate::rawinput::KeyEvent> {
         crate::rawinput::drain(&self.raw)
-    }
-
-    pub fn is_window(&self) -> bool {
-        unsafe { !self.hwnd.is_null() && IsWindow(self.hwnd) != 0 }
     }
 }
 
@@ -435,11 +516,13 @@ fn draw(surface: &mut Surface, cfg: &Crosshair) {
 
     let base_alpha = cfg.opacity as u32 * 255 / 100;
     let outline = cfg.outline;
+    // 描边有独立的透明度，不再写死 70%。
+    let outline_alpha = cfg.outline_opacity as u32;
 
     // 描边：同一套形状放大一圈画深色，再画本体。
     // 纯白准星在雪地或亮天空里会糊成一片。
     for (pad, color, alpha_scale) in [
-        (outline as f32, [0u8, 0u8, 0u8], 70u32),
+        (outline as f32, [0u8, 0u8, 0u8], outline_alpha),
         (0.0, cfg.color, 100u32),
     ] {
         let hw = half_width + pad;
@@ -454,29 +537,7 @@ fn draw(surface: &mut Surface, cfg: &Crosshair) {
                 for (sx, sy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
                     let px = x as f32 + sx - center_x;
                     let py = y as f32 + sy - center_y;
-                    let dx = px.abs();
-                    let dy = py.abs();
-                    let distance = (dx * dx + dy * dy).sqrt();
-
-                    let inside = match cfg.style {
-                        CrosshairStyle::Cross => {
-                            // 横竖各一条，中心留空
-                            (dx <= hw && dy >= g && dy <= g + r)
-                                || (dy <= hw && dx >= g && dx <= g + r)
-                        }
-                        CrosshairStyle::Dot => distance <= dot_radius + pad,
-                        CrosshairStyle::Ring => (distance - r).abs() <= hw,
-                        CrosshairStyle::TShape => {
-                            // FPS 里的 T 形：去掉十字上方那一截，只留左右和下方。
-                            //
-                            // 上方留白是为了不挡住敌人头部——预瞄时会下意识把
-                            // 准星往上抬，更容易压到爆头线。中心仍留空隙，
-                            // 控枪时还能找到中心点。
-                            (dx <= hw && py >= g && py <= g + r)
-                                || (dy <= hw && dx >= g && dx <= g + r)
-                        }
-                    };
-                    if inside {
+                    if inside(cfg.style, px, py, hw, r, g, dot_radius + pad) {
                         hits += 1;
                     }
                 }
@@ -484,6 +545,59 @@ fn draw(surface: &mut Surface, cfg: &Crosshair) {
                     surface.put(x, y, color, (a_base * hits / 4) as u8);
                 }
             }
+        }
+    }
+
+    // 中心点：独立于形状，叠加在中心。FPS 里常关掉四段线只留一个点。
+    if cfg.center_dot {
+        let r = (cfg.center_dot_size.max(1) as f32) / 2.0;
+        for y in 0..h {
+            for x in 0..w {
+                let mut hits = 0u32;
+                for (sx, sy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+                    let px = x as f32 + sx - center_x;
+                    let py = y as f32 + sy - center_y;
+                    if (px * px + py * py).sqrt() <= r {
+                        hits += 1;
+                    }
+                }
+                if hits > 0 {
+                    surface.put(x, y, cfg.color, (base_alpha * hits / 4) as u8);
+                }
+            }
+        }
+    }
+}
+
+/// 形状的归属判断：点 (px, py) 是否落在准星上。
+///
+/// 坐标以画布中心为原点。抽成独立函数是为了能单测——形状画反了
+/// （T 形曾经两次画错方向）光看代码很难发现，跑一遍断言立刻露馅。
+fn inside(
+    style: CrosshairStyle,
+    px: f32,
+    py: f32,
+    hw: f32,
+    r: f32,
+    g: f32,
+    dot_radius: f32,
+) -> bool {
+    match style {
+        CrosshairStyle::Cross => {
+            // 横竖各一条，中心留空
+            (px.abs() <= hw && py.abs() >= g && py.abs() <= g + r)
+                || (py.abs() <= hw && px.abs() >= g && px.abs() <= g + r)
+        }
+        CrosshairStyle::Dot => (px * px + py * py).sqrt() <= dot_radius,
+        CrosshairStyle::Ring => ((px * px + py * py).sqrt() - r).abs() <= hw,
+        CrosshairStyle::TShape => {
+            // FPS 里的 T 形：去掉十字上方那一截，只留左右和下方。
+            //
+            // 上方留白是为了不挡住敌人头部——预瞄时会下意识把
+            // 准星往上抬，更容易压到爆头线。中心仍留空隙，
+            // 控枪时还能找到中心点。
+            (px.abs() <= hw && py >= g && py <= g + r)
+                || (py.abs() <= hw && px.abs() >= g && px.abs() <= g + r)
         }
     }
 }
@@ -511,6 +625,12 @@ pub fn monitor_containing(point: (i32, i32)) -> Option<(i32, i32, i32, i32)> {
     }
 }
 
+/// 当前前台窗口句柄，仅用于诊断。
+pub fn foreground_hwnd() -> usize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    unsafe { GetForegroundWindow() as usize }
+}
+
 /// 前台窗口的客户区矩形（屏幕坐标）。准星只在它范围内生效。
 pub fn foreground_client_rect() -> Option<(i32, i32, i32, i32)> {
     use windows_sys::Win32::Foundation::RECT;
@@ -535,11 +655,98 @@ pub fn foreground_client_rect() -> Option<(i32, i32, i32, i32)> {
     }
 }
 
-/// 准星开关的全局状态：总开关 + 当前应显示的配置。
-#[derive(Default)]
-pub struct CrosshairState {
-    /// 用户按开关切的总状态
-    pub armed: AtomicBool,
-    /// 当前该显示的配置（由 App 在前台变化时更新）
-    pub current: Mutex<Option<Crosshair>>,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 常用几何：线宽 2 → hw=1，长度 10 → r=5，中心间距 4 → g=2
+    const HW: f32 = 1.0;
+    const R: f32 = 5.0;
+    const G: f32 = 2.0;
+    const DOT: f32 = 1.0;
+
+    fn is(style: CrosshairStyle, px: f32, py: f32) -> bool {
+        inside(style, px, py, HW, R, G, DOT)
+    }
+
+    #[test]
+    fn cross_has_four_arms_and_empty_center() {
+        // 中心区域留空，玩家才能看清目标点
+        assert!(!is(CrosshairStyle::Cross, 0.0, 0.0), "中心必须留空");
+        assert!(!is(CrosshairStyle::Cross, 0.0, 1.5), "间距内没有线");
+        // 四个方向各有一段
+        assert!(is(CrosshairStyle::Cross, 0.0, 5.0), "上臂");
+        assert!(is(CrosshairStyle::Cross, 0.0, -5.0), "下臂");
+        assert!(is(CrosshairStyle::Cross, 5.0, 0.0), "右臂");
+        assert!(is(CrosshairStyle::Cross, -5.0, 0.0), "左臂");
+        // 臂长到 gap+size 为止
+        assert!(is(CrosshairStyle::Cross, 0.0, G + R - 0.1), "臂的末端仍在");
+        assert!(!is(CrosshairStyle::Cross, 0.0, G + R + 0.5), "臂外没有线");
+    }
+
+    #[test]
+    fn tshape_drops_only_the_top_arm() {
+        // 这是用户纠正过两次的地方：T 形 = 去掉上方竖线，留左右和下方。
+        assert!(!is(CrosshairStyle::TShape, 0.0, -5.0), "上方不能有竖线");
+        assert!(is(CrosshairStyle::TShape, 0.0, 5.0), "下方必须保留");
+        assert!(is(CrosshairStyle::TShape, 5.0, 0.0), "右臂");
+        assert!(is(CrosshairStyle::TShape, -5.0, 0.0), "左臂");
+        assert!(!is(CrosshairStyle::TShape, 0.0, 0.0), "中心留空");
+    }
+
+    #[test]
+    fn dot_is_round_and_small() {
+        assert!(is(CrosshairStyle::Dot, 0.0, 0.0), "中心是实心的");
+        assert!(is(CrosshairStyle::Dot, 0.7, 0.7), "半径内");
+        assert!(!is(CrosshairStyle::Dot, 5.0, 0.0), "半径外没有东西");
+    }
+
+    #[test]
+    fn ring_is_hollow() {
+        assert!(!is(CrosshairStyle::Ring, 0.0, 0.0), "圆环中心必须是空的");
+        assert!(is(CrosshairStyle::Ring, R, 0.0), "环上的点属于圆环");
+        assert!(is(CrosshairStyle::Ring, 0.0, -R), "四个方向都在环上");
+        assert!(!is(CrosshairStyle::Ring, R + 3.0, 0.0), "环外没有东西");
+    }
+
+    #[test]
+    fn draw_stays_inside_canvas() {
+        // 画布尺寸按 gap+size+outline+thickness 算，图形不能超出——
+        // 超出的部分会被裁掉，准星看起来就是缺了一截。
+        let cfg = Crosshair {
+            gap: 4,
+            size: 10,
+            outline: 2,
+            thickness: 3,
+            ..Crosshair::default()
+        };
+        let extent = (cfg.gap + cfg.size + cfg.outline + cfg.thickness + 2) as i32;
+        let canvas = (extent * 2 + 1).max(9);
+        let half = canvas as f32 / 2.0;
+
+        let hw = cfg.thickness as f32 / 2.0 + cfg.outline as f32;
+        let reach = cfg.gap as f32 / 2.0 + cfg.size as f32 / 2.0 + cfg.outline as f32;
+        assert!(reach + hw <= half + 1.0, "图形半径 {reach}+{hw} 超出画布半宽 {half}");
+
+        // 每个方向上的最远点都要落在画布内
+        for (x, y) in [
+            (0.0f32, -reach),
+            (0.0, reach),
+            (reach, 0.0),
+            (-reach, 0.0),
+        ] {
+            assert!(x.abs() + hw <= half + 1.0 && y.abs() + hw <= half + 1.0);
+        }
+    }
+
+    #[test]
+    fn opposite_styles_do_not_overlap_in_center() {
+        // 四种样式在中心都应该保持"能看见目标"：要么留空，要么是细点
+        // 每种样式的中心命中结果固定下来，改绘制逻辑时不会悄悄变样
+        let center = |s| inside(s, 0.0, 0.0, HW, R, G, DOT);
+        assert!(!center(CrosshairStyle::Cross));
+        assert!(!center(CrosshairStyle::Ring));
+        assert!(!center(CrosshairStyle::TShape));
+        assert!(center(CrosshairStyle::Dot));
+    }
 }

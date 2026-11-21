@@ -239,6 +239,10 @@ impl KeyState {
 /// `is_repeat` suppresses the key-repeat storm Windows sends for a held key;
 /// the original ignored repeats in the opposite/neutral branches for the same
 /// reason.
+///
+/// 生产代码走 `handle_with`（要传修饰键标记），这里是它的简写，
+/// 只给单元测试用。
+#[cfg(test)]
 pub fn handle(
     table: &BindTable,
     state: &mut KeyState,
