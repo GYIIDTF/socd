@@ -262,8 +262,12 @@ impl Overlay {
 
         // 画布只覆盖准星本身，不铺满整个窗口——省内存也省合成开销。
         //
-        // 用奇数尺寸：中心像素是 canvas/2 的整数部分，奇数时四个方向
-        // 到边缘的距离完全相等，画出来才是对称的。偶数会在某一侧多一格。
+        // 用**偶数**边长：画布中心正好落在两个像素的交界处，
+        // 也就是像素边界上。这样准星中心和游戏内准星（按像素边界
+        // 定位）重合，不再差半格。
+        //
+        // 以前用奇数边长，中心只能在某个像素的正中心（x+0.5），
+        // 和按像素边界画的准星恒差半格，与线宽奇偶无关。
         //
         // 中心点可能比四段线更靠里也可能更大，所以画布至少要有中心点
         // 那么大，否则会被裁掉一角。
@@ -274,7 +278,7 @@ impl Overlay {
             0
         };
         let extent = shape_extent.max(dot_extent);
-        let canvas: i32 = (extent * 2 + 1).max(9);
+        let canvas: i32 = (extent * 2).max(8);
 
         // 准星放在窗口（或屏幕）正中，再加上用户设定的物理像素偏移。
         //
@@ -287,25 +291,20 @@ impl Overlay {
         // 之前这里除以了显示器缩放比例（`offset / scale`），在 125% 缩放下
         // 设 100px 实际只移动 80px。实测确认后去掉。
         //
-        // 像素对齐约定。设客户区在屏幕上是 [left, left+width)，几何中心
-        // C = left + width/2。画布奇数边长 canvas = 2k+1，覆盖
-        // [cx, cx+canvas)，视觉中心在 cx + k + 0.5。
+        // 像素对齐约定。设可见区在屏幕上是 [left, left+width)，几何中心
+        // C = left + width/2。
         //
-        // 要让准星和游戏内准星重合，得和游戏用同一个约定。DirectX 的
-        // 屏幕空间把坐标 x 锚定到「像素中心 x+0.5」，即 C 落在列
-        // floor(C) 的中心上：C=600.0 → 列 600（中心 600.5），
-        // C=600.5 → 列 600（中心 600.5）。
+        // 画布用偶数边长，它的中心落在 cx + canvas/2，正好是一个整数，
+        // 也就是两个像素之间的边界。
         //
-        // 两种宽度下都对上的唯一选择，是让画布中心 = floor(C) + 0.5：
-        //   cx = floor(C) + 0.5 - k - 0.5 = floor(C) - k
-        // 取整后正好是 floor(C) - canvas/2。
-        //
-        // 这里对 width（不是客户区右边界）取整，因为 width/2 在宽为
-        // 奇数时会落成 .5，floor 后仍取那个像素——和游戏一致。
+        // 直接令画布中心 = C，取整后就是
+        //   cx = round(C) - canvas/2
+        // C 是整数时精确对上；C 带 .5 时差半格（窗口宽为奇数才出现，
+        // 那种情况下无论怎么摆都不可能同时满足"像素边界"和"中心精确"）。
         let center_x = left as f64 + width as f64 / 2.0 + cfg.offset_x as f64;
         let center_y = top as f64 + height as f64 / 2.0 + cfg.offset_y as f64;
-        let cx = center_x.floor() as i32 - canvas / 2;
-        let cy = center_y.floor() as i32 - canvas / 2;
+        let cx = center_x.round() as i32 - canvas / 2;
+        let cy = center_y.round() as i32 - canvas / 2;
 
         // 上一轮画过什么。前台轮询每 120ms 调一次本函数，而配置和形状
         // 通常几分钟不变——没有这份记录的话，每一轮都要把几万像素重新
@@ -769,7 +768,7 @@ mod tests {
             ..Crosshair::default()
         };
         let extent = (cfg.gap + cfg.size + cfg.outline + cfg.thickness + 2) as i32;
-        let canvas = (extent * 2 + 1).max(9);
+        let canvas = (extent * 2).max(8);
         let half = canvas as f32 / 2.0;
 
         let hw = cfg.thickness as f32 / 2.0 + cfg.outline as f32;
@@ -800,39 +799,47 @@ mod tests {
 
     /// 画布左上角的计算规则。和 `apply` 里保持一致，抽出来给测试用。
     fn canvas_origin(left: i32, width: i32, canvas: i32, offset: i32) -> i32 {
-        (left as f64 + width as f64 / 2.0 + offset as f64).floor() as i32 - canvas / 2
+        let c = left as f64 + width as f64 / 2.0 + offset as f64;
+        c.round() as i32 - canvas / 2
     }
 
     #[test]
-    fn crosshair_lands_on_directx_pixel_convention() {
-        // 准星的视觉中心必须和游戏内准星落在同一像素。
-        // DirectX 把坐标 x 锚定到像素中心 x+0.5，即几何中心 C 落在
-        // 列 floor(C) 上。画布中心 = cx + canvas/2 + 0.5，
-        // 这两个值必须一致，否则就是差一格。
-        let canvas = 31;
+    fn crosshair_center_sits_on_pixel_boundary() {
+        // 画布用偶数边长，中心落在 cx + canvas/2 ——一个整数，
+        // 也就是两个像素之间那条线。游戏内的准星按像素边界定位，
+        // 两者才对得齐。
+        //
+        // 窗口可见区宽为偶数时，中心是个整数，必须精确重合；
+        // 宽为奇数时中心落在 .5，任何整数位置都只能差半格，取最近的。
+        let canvas = 32;
         for (left, width) in [
-            (0, 800),    // 偶数宽，中心 .0
-            (0, 801),    // 奇数宽，中心 .5
+            (0, 800),    // 偶数宽，中心 400.0
+            (0, 801),    // 奇数宽，中心 400.5
             (200, 800),  // 非零起点
             (200, 801),
             (0, 1920),   // 常见分辨率
             (0, 1921),
+            (7, 986),    // DWM 可见边界实测值，中心 500.0
+            (7, 987),    // 同上，中心 500.5
             (-8, 1936),  // 跨屏窗口的负坐标
+            (107, 985),  // 奇数起点 + 奇数宽
+            (107, 986),  // 奇数起点 + 偶数宽
         ] {
             let cx = canvas_origin(left, width, canvas, 0);
-            // 画布覆盖 [cx, cx+canvas)，画布中心（像素边界坐标）是
-            // cx + canvas/2（整数除，canvas 为奇数时即中心像素的左边界），
-            // 中心像素的像素中心就是 cx + canvas/2 + 0.5。
-            let center_pixel = cx + canvas / 2;
-            let drawn_center = center_pixel as f64 + 0.5;
+            let drawn_center = (cx + canvas / 2) as f64;
             let real = left as f64 + width as f64 / 2.0;
-            let expected = real.floor() as f64 + 0.5;
+            let expected = real.round();
             assert!(
                 (drawn_center - expected).abs() < 1e-9,
-                "{width}px 宽：准星中心像素 {center_pixel}（中心 {drawn_center}），\
-                 应落在列 {}（中心 {expected}，真实中心 {real}）",
-                expected as i32
+                "{width}px 宽：准星中心 {drawn_center}，应落在 {expected}（真实中心 {real}）"
             );
+            // 偶数宽必须精确重合
+            if width % 2 == 0 {
+                assert!(
+                    (drawn_center - real).abs() < 1e-9,
+                    "{width}px 宽是偶数，中心应精确重合：{drawn_center} vs {real}"
+                );
+            }
         }
     }
 
