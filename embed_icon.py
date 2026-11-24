@@ -116,7 +116,7 @@ def build_rsrc(ico_bytes, rsrc_rva):
     # RT_VERSION：文件属性里看到的版本号、产品名、公司名。
     # 没有这块的 exe 在杀软静态扫描里可疑度更高。
     version_blob = build_version_info(
-        version=(0, 2, 3, 0),
+        version=(0, 2, 4, 0),
         company="恨海情天",
         product="恨海情天 · SOCD",
         description="SOCD 按键重映射工具",
