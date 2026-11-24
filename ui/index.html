@@ -2353,10 +2353,13 @@ function renderCrosshair() {
     ? "全局配置没有绑定的程序，先新建一个程序配置"
     : "该程序在前台时，把它的窗口拉满整块显示器。无边框全屏下系统不会自动拉伸画面，用这个代替显卡缩放。";
   stretchBtn.onclick = async () => {
+    // 先记下当前值：renderCrosshair() 之后 prof 指向的可能已经是新状态，
+    // 拿它判断"刚才是开还是关"会把提示说反。
+    const wasOn = !!prof.stretchWindow;
     try {
-      state = await invoke("setStretchWindow", { enabled: !prof.stretchWindow });
+      state = await invoke("setStretchWindow", { enabled: !wasOn });
       renderCrosshair();
-      notify(prof.stretchWindow
+      notify(!wasOn
         ? "已开启：切到该程序时会把它窗口拉满屏幕"
         : "已关闭：窗口恢复原状", false, 4000);
     } catch (e) { notify(e.message, true, 6000); }

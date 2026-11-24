@@ -650,8 +650,24 @@ pub fn foreground_hwnd() -> usize {
 }
 
 /// 前台窗口的客户区矩形（屏幕坐标）。准星只在它范围内生效。
+///
+/// 优先用 DWM 的可见边界（`DWMWA_EXTENDED_FRAME_BOUNDS`）。
+///
+/// 为什么不用 `GetClientRect`：窗口被「拉满窗口」功能拉到整屏后，
+/// 为了让可见区铺满，窗口外框会伸到屏幕外一点；而 DWM 又从客户区
+/// 里扣掉一圈不可见边框，于是 `GetClientRect` 给出 1906x1073、
+/// 起点 (7,0)——中心比屏幕中心高 3.5 像素，准星跟着偏。
+///
+/// DWM 的可见边界就是玩家真正看到的画面区域，拉满后正好等于整块
+/// 显示器，用它定位准星才是对的。
+///
+/// 反例：游戏用独占全屏时 DWM 给出的值可能不可靠，那种情况本来就
+/// 显示不了准星，不影响。
 pub fn foreground_client_rect() -> Option<(i32, i32, i32, i32)> {
     use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS,
+    };
     use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, GetForegroundWindow};
 
@@ -660,6 +676,20 @@ pub fn foreground_client_rect() -> Option<(i32, i32, i32, i32)> {
         if hwnd.is_null() {
             return None;
         }
+
+        // 先试 DWM 可见边界
+        let mut vis: RECT = std::mem::zeroed();
+        let hr = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS as u32,
+            &mut vis as *mut RECT as *mut std::ffi::c_void,
+            std::mem::size_of::<RECT>() as u32,
+        );
+        if hr == 0 && vis.right > vis.left && vis.bottom > vis.top {
+            return Some((vis.left, vis.top, vis.right, vis.bottom));
+        }
+
+        // DWM 不可用：退回客户区
         let mut rc: RECT = std::mem::zeroed();
         if GetClientRect(hwnd, &mut rc) == 0 {
             return None;

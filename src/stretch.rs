@@ -20,7 +20,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindow, GetWindowLongW, GetWindowRect, IsWindow,
     GetWindowThreadProcessId, IsWindowVisible, SetWindowLongW, SetWindowPos, GWL_STYLE, GWL_EXSTYLE,
-    GW_OWNER, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    GW_OWNER, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOZORDER, WS_CAPTION, WS_MAXIMIZE, WS_MINIMIZE, WS_THICKFRAME,
 };
 
@@ -69,7 +69,7 @@ fn process_name(pid: u32) -> Option<String> {
     }
 }
 
-/// 判断一个窗口是不是程序的主窗口（可见、无 owner、有标题栏）。
+/// 判断一个窗口是不是程序的主窗口（可见、无 owner、有标题栏、在屏幕上）。
 fn is_main_window(hwnd: HWND) -> bool {
     unsafe {
         if IsWindowVisible(hwnd) == 0 {
@@ -85,6 +85,16 @@ fn is_main_window(hwnd: HWND) -> bool {
         }
         if style & (WS_MINIMIZE as u32) != 0 {
             return false;
+        }
+        // 有些程序（浏览器等）最小化后不置 WS_MINIMIZE，只是把窗口
+        // 挪到屏幕外 (-32000,-32000)。按坐标再排除一次，否则会把一个
+        // 看不见的窗口当成主窗口去拉伸。
+        let mut r: RECT = std::mem::zeroed();
+        if GetWindowRect(hwnd, &mut r) != 0 {
+            const OFFSCREEN: i32 = -10000;
+            if r.left <= OFFSCREEN || r.top <= OFFSCREEN {
+                return false;
+            }
         }
         true
     }
@@ -168,6 +178,19 @@ fn visible_rect(hwnd: HWND) -> Option<RECT> {
     }
 }
 
+/// 某个窗口是否属于指定程序（按进程的 exe 名比较）。
+fn belongs_to(hwnd: HWND, program: &str) -> bool {
+    unsafe {
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return false;
+        }
+        process_name(pid)
+            .is_some_and(|n| n == program.to_ascii_lowercase())
+    }
+}
+
 /// 窗口所在显示器的矩形。
 fn monitor_rect(hwnd: HWND) -> Option<RECT> {
     unsafe {
@@ -197,6 +220,20 @@ impl Stretcher {
         if program.is_empty() {
             return false;
         }
+
+        // 目标程序变了（比如切换了配置）：把上一个窗口还原。
+        //
+        // 每个程序最多只拉一个窗口。切换配置时不还原的话，旧窗口会
+        // 一直保持拉满、没有标题栏，用户再也调不回来。
+        //
+        // 还原后直接往下走：restore() 内部会 take() 掉 active，
+        // 下面的 find_main_window 会重新找目标程序的窗口。
+        if let Some(s) = self.active {
+            if !belongs_to(s.hwnd, program) {
+                self.restore();
+            }
+        }
+
         // 已经在拉伸的窗口优先复用。
         //
         // 拉伸时会去掉 WS_CAPTION，而 is_main_window() 要求窗口带标题栏。
@@ -317,32 +354,23 @@ impl Stretcher {
             unsafe {
                 SetWindowLongW(s.hwnd, GWL_STYLE, s.style);
                 SetWindowLongW(s.hwnd, GWL_EXSTYLE, s.ex_style);
+                // 一步恢复位置，同时取消置顶。
+                //
+                // 原来是先 HWND_TOPMOST 再 HWND_NOTOPMOST，中间那一帧
+                // 窗口会跳到最前面闪一下。直接给 HWND_NOTOPMOST 一步到位。
                 SetWindowPos(
                     s.hwnd,
-                    HWND_TOPMOST,
+                    (-2isize) as HWND,
                     s.rect.left,
                     s.rect.top,
                     s.rect.right - s.rect.left,
                     s.rect.bottom - s.rect.top,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
-                // 用 HWND_NOTOPMOST 恢复原始层级
-                SetWindowPos(
-                    s.hwnd,
-                    (-2isize) as HWND,
-                    0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
             }
         }
     }
 
-}
-
-impl Drop for Stretcher {
-    fn drop(&mut self) {
-        self.restore();
-    }
 }
 
 #[cfg(test)]
@@ -361,5 +389,53 @@ mod tests {
     fn absent_program_yields_null_window() {
         let hwnd = find_main_window("definitely-not-running.exe");
         assert!(hwnd.is_null());
+    }
+
+    #[test]
+    fn minimized_window_is_not_main() {
+        // 建一个带标题栏的窗口，然后最小化，is_main_window 必须返回 false。
+        // 有些程序最小化后不置 WS_MINIMIZE 而是把窗口挪到 -32000，
+        // 两种形态都不能被当成主窗口。
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, ShowWindow, SW_MINIMIZE,
+            WS_OVERLAPPEDWINDOW,
+        };
+
+        unsafe extern "system" fn proc_(h: HWND, m: u32, w: usize, l: isize) -> isize {
+            DefWindowProcW(h, m, w, l)
+        }
+
+        let cls: Vec<u16> = "SocdStretchTest\0".encode_utf16().collect();
+        let wc = windows_sys::Win32::UI::WindowsAndMessaging::WNDCLASSW {
+            style: 0,
+            lpfnWndProc: Some(proc_),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: std::ptr::null_mut(),
+            hIcon: std::ptr::null_mut(),
+            hCursor: std::ptr::null_mut(),
+            hbrBackground: std::ptr::null_mut(),
+            lpszMenuName: std::ptr::null(),
+            lpszClassName: cls.as_ptr(),
+        };
+        unsafe {
+            RegisterClassW(&wc);
+            let hwnd = CreateWindowExW(
+                0, cls.as_ptr(), cls.as_ptr(), WS_OVERLAPPEDWINDOW,
+                100, 100, 400, 300,
+                std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+                std::ptr::null(),
+            );
+            if hwnd.is_null() {
+                return; // 无桌面会话时跳过
+            }
+            ShowWindow(hwnd, windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNOACTIVATE);
+            assert!(is_main_window(hwnd), "普通窗口应被识别为主窗口");
+
+            ShowWindow(hwnd, SW_MINIMIZE);
+            assert!(!is_main_window(hwnd), "最小化的窗口不能被当成主窗口");
+
+            DestroyWindow(hwnd);
+        }
     }
 }

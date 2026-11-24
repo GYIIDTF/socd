@@ -323,6 +323,11 @@ impl App {
         // 窗口拉伸：只在目标程序位于前台、且该配置开了拉伸时执行。
         // 放在刷新准星之前——准星的位置取决于窗口客户区，先把窗口拉好，
         // 同一轮就能按新尺寸定位。
+        //
+        // 切走前台时**不恢复**：拉伸过的窗口保持拉满状态。这样 ALT+Tab
+        // 出去看别的东西再回来，窗口不会来回变尺寸。
+        // 只有关掉这个开关、或切换到另一个程序的配置时才会还原；
+        // 退出程序时也刻意保留拉满状态。
         let stretch = self
             .settings
             .profiles
@@ -330,7 +335,8 @@ impl App {
             .is_some_and(|p| p.stretch_window);
         if should_enable && stretch && !program.is_empty() {
             self.stretcher.stretch(program);
-        } else {
+        } else if !stretch {
+            // 配置里已经关掉了，把窗口还回去
             self.stretcher.restore();
         }
 
