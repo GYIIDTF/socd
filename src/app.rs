@@ -33,6 +33,8 @@ pub struct ProfileView {
     pub program: String,
     pub mappings: Vec<MappingView>,
     pub crosshair: crate::settings::Crosshair,
+    /// 该程序在前台时是否把窗口拉满显示器
+    pub stretch_window: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +166,8 @@ pub struct App {
     pub hotkey_held: bool,
     /// 最近一次准星渲染的结果，用于界面/诊断
     pub crosshair_last: String,
+    /// 窗口拉伸器：需要时把前台程序的主窗口拉满显示器。
+    pub stretcher: crate::stretch::Stretcher,
 }
 
 impl App {
@@ -211,6 +215,7 @@ impl App {
             crosshair_armed: initial_armed(hotkey_mode),
             hotkey_held: false,
             crosshair_last: String::new(),
+            stretcher: crate::stretch::Stretcher::new(),
         };
 
         if app.settings.profiles.is_empty() {
@@ -314,6 +319,20 @@ impl App {
         } else {
             None
         };
+
+        // 窗口拉伸：只在目标程序位于前台、且该配置开了拉伸时执行。
+        // 放在刷新准星之前——准星的位置取决于窗口客户区，先把窗口拉好，
+        // 同一轮就能按新尺寸定位。
+        let stretch = self
+            .settings
+            .profiles
+            .get(idx)
+            .is_some_and(|p| p.stretch_window);
+        if should_enable && stretch && !program.is_empty() {
+            self.stretcher.stretch(program);
+        } else {
+            self.stretcher.restore();
+        }
 
         self.refresh_crosshair(should_enable);
     }
@@ -517,6 +536,7 @@ impl App {
                     program: p.program.clone(),
                     mappings: p.mappings.iter().map(mapping_view).collect(),
                     crosshair: p.crosshair,
+                    stretch_window: p.stretch_window,
                 })
                 .collect(),
             active_index: active,
@@ -997,6 +1017,33 @@ impl App {
                 }
                 self.save()?;
                 self.refresh_now();
+                Ok(self.state()?)
+            }
+
+            "setStretchWindow" => {
+                let want = payload
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .ok_or("missing enabled")?;
+                let idx = self
+                    .settings
+                    .active_profile_index
+                    .min(self.settings.profiles.len().saturating_sub(1));
+                let is_global = self
+                    .settings
+                    .profiles
+                    .get(idx)
+                    .map(|p| p.program.is_empty())
+                    .unwrap_or(true);
+                if is_global {
+                    return Err("全局配置没有绑定的程序，无法拉伸窗口".into());
+                }
+                if let Some(p) = self.settings.profiles.get_mut(idx) {
+                    p.stretch_window = want;
+                }
+                self.save()?;
+                // 立刻生效/撤销，不用等下一轮轮询
+                self.reapply();
                 Ok(self.state()?)
             }
 

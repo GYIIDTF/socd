@@ -13,6 +13,7 @@ mod server;
 mod single_instance;
 mod settings;
 mod socd;
+mod stretch;
 mod win;
 
 use std::sync::atomic::{AtomicBool, Ordering};
