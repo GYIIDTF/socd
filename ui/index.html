@@ -803,25 +803,13 @@
     text-align: right;
   }
 
-  /* 行内问号：鼠标移上去显示说明 */
-  .ch-info {
-    display: inline-grid;
-    place-items: center;
-    width: 14px;
-    height: 14px;
-    margin-left: 4px;
-    border-radius: 50%;
-    border: 1px solid var(--line-strong);
-    font-size: 10px;
-    line-height: 1;
-    color: var(--ink-4);
-    cursor: help;
-    vertical-align: 1px;
-  }
-
-  .ch-info:hover { color: var(--ink-2); border-color: var(--ink-4); }
-
   .switch:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* 滑杆旁边的说明文字 */
+  .ch-hint-inline {
+    font-size: 11.5px;
+    color: var(--ink-4);
+  }
 
   .ch-axis {
     font-size: 12px;
@@ -1796,7 +1784,7 @@
         <div class="ch-row">
           <label class="ch-label">线宽</label>
           <div class="ch-field">
-            <input type="range" id="ch-thickness" min="1" max="10" step="1">
+            <input type="range" id="ch-thickness" min="1" max="20" step="1">
             <output id="ch-thickness-val"></output>
           </div>
         </div>
@@ -1804,7 +1792,7 @@
         <div class="ch-row">
           <label class="ch-label">中心间距</label>
           <div class="ch-field">
-            <input type="range" id="ch-gap" min="0" max="40" step="1">
+            <input type="range" id="ch-gap" min="0" max="100" step="1">
             <output id="ch-gap-val"></output>
           </div>
         </div>
@@ -1812,7 +1800,7 @@
         <div class="ch-row">
           <label class="ch-label">长度</label>
           <div class="ch-field">
-            <input type="range" id="ch-size" min="2" max="40" step="1">
+            <input type="range" id="ch-size" min="2" max="100" step="1">
             <output id="ch-size-val"></output>
           </div>
         </div>
@@ -1828,7 +1816,7 @@
         <div class="ch-row">
           <label class="ch-label">描边</label>
           <div class="ch-field">
-            <input type="range" id="ch-outline" min="0" max="5" step="1">
+            <input type="range" id="ch-outline" min="0" max="10" step="1">
             <output id="ch-outline-val"></output>
           </div>
         </div>
@@ -1848,17 +1836,6 @@
             <input type="number" class="ch-num" id="ch-offset-x" min="-4000" max="4000" step="1">
             <span class="ch-axis">Y</span>
             <input type="number" class="ch-num" id="ch-offset-y" min="-4000" max="4000" step="1">
-          </div>
-        </div>
-
-        <div class="ch-row">
-          <label class="ch-label">拉满窗口
-            <span class="ch-info" id="ch-stretch-hint" tabindex="0" role="img">?</span>
-          </label>
-          <div class="ch-field">
-            <button class="switch" id="ch-stretch" role="switch" aria-checked="false">
-              <span class="knob"></span>
-            </button>
           </div>
         </div>
 
@@ -2301,16 +2278,22 @@ function renderCrosshair() {
   bind("ch-gap", "gap", "px");
   bind("ch-size", "size", "px");
   bind("ch-opacity", "opacity", "%");
-  bind("ch-outline", "outline", "");
+  bind("ch-outline", "outline", "px");
   bind("ch-outline-opacity", "outline_opacity", "%");
   bind("ch-center-dot-size", "center_dot_size", "px");
 
-  // 中心点开关
+  // 中心点开关。大小独立可调——同样数值下圆点看起来比线段细
+  // （两端是弧线、面积小），所以想看着一样粗通常要设大一点。
+  //
+  // 「圆点」样式本身就是一整块实心圆，再叠一个中心点没有意义，
+  // 这时把开关和尺寸滑杆一起置灰。
   const dotBtn = document.getElementById("ch-center-dot");
-  dotBtn.setAttribute("aria-checked", c.center_dot ? "true" : "false");
+  const dotSizeEl = document.getElementById("ch-center-dot-size");
+  const isDotStyle = c.style === "DOT";
+  dotBtn.setAttribute("aria-checked", c.center_dot && !isDotStyle ? "true" : "false");
+  dotBtn.disabled = isDotStyle;
+  dotSizeEl.disabled = isDotStyle || !c.center_dot;
   dotBtn.onclick = () => pushCrosshair({ center_dot: !c.center_dot });
-  // 关掉时大小滑杆没意义，置灰
-  document.getElementById("ch-center-dot-size").disabled = !c.center_dot;
 
   // 触发方式
   const modeHost = document.getElementById("ch-hotkey-mode");
@@ -2340,30 +2323,6 @@ function renderCrosshair() {
   };
   bindNum("ch-offset-x", "offset_x");
   bindNum("ch-offset-y", "offset_y");
-
-  // 拉满窗口：把目标程序的主窗口改成整块显示器大小。
-  // 无边框全屏时显卡缩放不生效，用它替 DWM 完成拉伸。
-  const stretchBtn = document.getElementById("ch-stretch");
-  const stretchHint = document.getElementById("ch-stretch-hint");
-  const prof = activeProfile();
-  const isGlobal = !prof || !prof.program;
-  stretchBtn.setAttribute("aria-checked", prof && prof.stretchWindow ? "true" : "false");
-  stretchBtn.disabled = isGlobal;
-  stretchHint.title = isGlobal
-    ? "全局配置没有绑定的程序，先新建一个程序配置"
-    : "该程序在前台时，把它的窗口拉满整块显示器。无边框全屏下系统不会自动拉伸画面，用这个代替显卡缩放。";
-  stretchBtn.onclick = async () => {
-    // 先记下当前值：renderCrosshair() 之后 prof 指向的可能已经是新状态，
-    // 拿它判断"刚才是开还是关"会把提示说反。
-    const wasOn = !!prof.stretchWindow;
-    try {
-      state = await invoke("setStretchWindow", { enabled: !wasOn });
-      renderCrosshair();
-      notify(!wasOn
-        ? "已开启：切到该程序时会把它窗口拉满屏幕"
-        : "已关闭：窗口恢复原状", false, 4000);
-    } catch (e) { notify(e.message, true, 6000); }
-  };
 
   // 两个快捷键按钮各显示自己的键
   const showBtn = document.getElementById("ch-key");
@@ -2437,10 +2396,14 @@ function renderCrosshairPreview(c) {
   if (o > 0) shape += drawOne("#000", op * (c.outline_opacity / 100), o);
   shape += drawOne(col, op, 0);
 
-  // 中心点叠在最上层，颜色取主体色
+  // 中心点叠在最上层，颜色取主体色。和四段线一样带描边。
   if (c.center_dot) {
-    shape += `<circle cx="${cx}" cy="${cy}" r="${c.center_dot_size / 2}" `
-           + `fill="${col}" opacity="${op}"/>`;
+    const dr = c.center_dot_size / 2;
+    if (o > 0) {
+      shape += `<circle cx="${cx}" cy="${cy}" r="${dr + o}" fill="#000" `
+             + `opacity="${op * (c.outline_opacity / 100)}"/>`;
+    }
+    shape += `<circle cx="${cx}" cy="${cy}" r="${dr}" fill="${col}" opacity="${op}"/>`;
   }
 
   host.innerHTML = `<svg width="100%" height="100%" viewBox="0 0 ${span} ${span}"

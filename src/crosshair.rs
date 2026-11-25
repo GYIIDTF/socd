@@ -272,8 +272,10 @@ impl Overlay {
         // 中心点可能比四段线更靠里也可能更大，所以画布至少要有中心点
         // 那么大，否则会被裁掉一角。
         let shape_extent = (cfg.gap + cfg.size + cfg.outline + cfg.thickness + 2) as i32;
+        // 中心点有独立尺寸，描边时半径再加一个描边宽度，
+        // 否则外圈会被画布裁掉。
         let dot_extent = if cfg.center_dot {
-            (cfg.center_dot_size + 2) as i32
+            (cfg.center_dot_size + cfg.outline * 2 + 2) as i32
         } else {
             0
         };
@@ -566,20 +568,34 @@ fn draw(surface: &mut Surface, cfg: &Crosshair) {
     }
 
     // 中心点：独立于形状，叠加在中心。FPS 里常关掉四段线只留一个点。
+    //
+    // 直径单独可调。同样数值下圆点看起来比线段细（圆的两端是弧线，
+    // 面积小、边缘是渐变），所以想让两点看着一样粗，圆点通常要稍大。
+    //
+    // 和四段线一样带描边：纯色点在亮背景（雪地、天空）上会糊掉，
+    // 描边保证任何背景下都看得清。描边宽度用同一个 outline，
+    // 透明度用 outline_opacity。
     if cfg.center_dot {
         let r = (cfg.center_dot_size.max(1) as f32) / 2.0;
-        for y in 0..h {
-            for x in 0..w {
-                let mut hits = 0u32;
-                for (sx, sy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
-                    let px = x as f32 + sx - center_x;
-                    let py = y as f32 + sy - center_y;
-                    if (px * px + py * py).sqrt() <= r {
-                        hits += 1;
+        for (pad, color, alpha_scale) in [
+            (outline as f32, [0u8, 0u8, 0u8], outline_alpha),
+            (0.0, cfg.color, 100u32),
+        ] {
+            let rr = r + pad;
+            let a_base = base_alpha * alpha_scale / 100;
+            for y in 0..h {
+                for x in 0..w {
+                    let mut hits = 0u32;
+                    for (sx, sy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+                        let px = x as f32 + sx - center_x;
+                        let py = y as f32 + sy - center_y;
+                        if (px * px + py * py).sqrt() <= rr {
+                            hits += 1;
+                        }
                     }
-                }
-                if hits > 0 {
-                    surface.put(x, y, cfg.color, (base_alpha * hits / 4) as u8);
+                    if hits > 0 {
+                        surface.put(x, y, color, (a_base * hits / 4) as u8);
+                    }
                 }
             }
         }
@@ -652,13 +668,12 @@ pub fn foreground_hwnd() -> usize {
 ///
 /// 优先用 DWM 的可见边界（`DWMWA_EXTENDED_FRAME_BOUNDS`）。
 ///
-/// 为什么不用 `GetClientRect`：窗口被「拉满窗口」功能拉到整屏后，
-/// 为了让可见区铺满，窗口外框会伸到屏幕外一点；而 DWM 又从客户区
-/// 里扣掉一圈不可见边框，于是 `GetClientRect` 给出 1906x1073、
-/// 起点 (7,0)——中心比屏幕中心高 3.5 像素，准星跟着偏。
+/// 为什么不用 `GetClientRect`：带标题栏的窗口，`GetClientRect` 会从
+/// 客户区里扣掉一圈不可见边框，于是给出的矩形比玩家实际看到的画面
+/// 小一圈、中心也跟着偏。实测一个铺满屏幕的窗口会得到 1906x1073、
+/// 起点 (7,0)，中心比屏幕中心高 3.5 像素，准星跟着偏。
 ///
-/// DWM 的可见边界就是玩家真正看到的画面区域，拉满后正好等于整块
-/// 显示器，用它定位准星才是对的。
+/// DWM 的可见边界就是玩家真正看到的画面区域，用它定位准星才是对的。
 ///
 /// 反例：游戏用独占全屏时 DWM 给出的值可能不可靠，那种情况本来就
 /// 显示不了准星，不影响。

@@ -205,10 +205,10 @@ pub struct Crosshair {
     pub outline: u32,
     /// 描边不透明度 0-100。独立于主体，方便在亮背景上把描边压淡。
     pub outline_opacity: u8,
-    /// 中心点。和主体分开控制——FPS 里常关掉主体只留一个点。
-    pub center_dot: bool,
     /// 中心点直径，像素
     pub center_dot_size: u32,
+    /// 中心点。和主体分开控制——FPS 里常关掉主体只留一个点。
+    pub center_dot: bool,
     /// 相对显示器中心的偏移，物理像素。正 X 向右，正 Y 向下。
     pub offset_x: i32,
     pub offset_y: i32,
@@ -228,8 +228,8 @@ impl Default for Crosshair {
             opacity: 100,
             outline: 1,
             outline_opacity: 70,
+            center_dot_size: 4,
             center_dot: false,
-            center_dot_size: 2,
             offset_x: 0,
             offset_y: 0,
         }
@@ -247,10 +247,6 @@ pub struct Profile {
     pub program: String,
     pub mappings: Vec<Mapping>,
     pub crosshair: Crosshair,
-    /// 该程序在前台时，把它的窗口拉满整个显示器。
-    ///
-    /// 用于无边框全屏下显卡缩放失效的情况：由 DWM 替我们做拉伸。
-    pub stretch_window: bool,
 }
 
 impl Profile {
@@ -258,7 +254,6 @@ impl Profile {
         Profile {
             program: program.into(),
             mappings: Vec::new(),
-            stretch_window: false,
             crosshair: Crosshair::default(),
         }
     }
@@ -380,7 +375,6 @@ impl Settings {
                 match key.trim().to_ascii_lowercase().as_str() {
                     "active" => is_active = value == "true",
                     "program" => profile.program = value.to_string(),
-                    "stretch_window" => profile.stretch_window = value == "true",
                     // 旧版本遗留字段：Windows 专用程序，忽略
                     "platform" => {}
                     // 准星：一个字段一行，逐项覆盖默认值。
@@ -432,13 +426,13 @@ impl Settings {
                             profile.crosshair.outline_opacity = v.min(100);
                         }
                     }
-                    "crosshair_center_dot" => {
-                        profile.crosshair.center_dot = value == "true";
-                    }
                     "crosshair_center_dot_size" => {
                         if let Ok(v) = value.parse::<u32>() {
-                            profile.crosshair.center_dot_size = v.clamp(1, 20);
+                            profile.crosshair.center_dot_size = v.clamp(1, 40);
                         }
+                    }
+                    "crosshair_center_dot" => {
+                        profile.crosshair.center_dot = value == "true";
                     }
                     "crosshair_offset_x" => {
                         if let Ok(v) = value.parse::<i32>() {
@@ -527,9 +521,6 @@ impl Settings {
                 out.push_str("active: true\n");
             }
             out.push_str(&format!("program: {}\n", profile.program));
-            if profile.stretch_window {
-                out.push_str("stretch_window: true\n");
-            }
             for m in &profile.mappings {
                 // 草稿只存在于编辑中的界面，不该落盘：它没有真实按键，
                 // 写进文件只会留下 `mapping: OPPOSITE 0 0` 这种脏行。
@@ -583,12 +574,6 @@ impl Settings {
                 }
                 if c.center_dot != d.center_dot {
                     out.push_str(&format!("crosshair_center_dot: {}\n", c.center_dot));
-                }
-                if c.center_dot_size != d.center_dot_size {
-                    out.push_str(&format!(
-                        "crosshair_center_dot_size: {}\n",
-                        c.center_dot_size
-                    ));
                 }
                 if c.offset_x != d.offset_x {
                     out.push_str(&format!("crosshair_offset_x: {}\n", c.offset_x));

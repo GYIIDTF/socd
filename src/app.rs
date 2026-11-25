@@ -33,8 +33,6 @@ pub struct ProfileView {
     pub program: String,
     pub mappings: Vec<MappingView>,
     pub crosshair: crate::settings::Crosshair,
-    /// 该程序在前台时是否把窗口拉满显示器
-    pub stretch_window: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,8 +164,6 @@ pub struct App {
     pub hotkey_held: bool,
     /// 最近一次准星渲染的结果，用于界面/诊断
     pub crosshair_last: String,
-    /// 窗口拉伸器：需要时把前台程序的主窗口拉满显示器。
-    pub stretcher: crate::stretch::Stretcher,
 }
 
 impl App {
@@ -215,7 +211,6 @@ impl App {
             crosshair_armed: initial_armed(hotkey_mode),
             hotkey_held: false,
             crosshair_last: String::new(),
-            stretcher: crate::stretch::Stretcher::new(),
         };
 
         if app.settings.profiles.is_empty() {
@@ -319,26 +314,6 @@ impl App {
         } else {
             None
         };
-
-        // 窗口拉伸：只在目标程序位于前台、且该配置开了拉伸时执行。
-        // 放在刷新准星之前——准星的位置取决于窗口客户区，先把窗口拉好，
-        // 同一轮就能按新尺寸定位。
-        //
-        // 切走前台时**不恢复**：拉伸过的窗口保持拉满状态。这样 ALT+Tab
-        // 出去看别的东西再回来，窗口不会来回变尺寸。
-        // 只有关掉这个开关、或切换到另一个程序的配置时才会还原；
-        // 退出程序时也刻意保留拉满状态。
-        let stretch = self
-            .settings
-            .profiles
-            .get(idx)
-            .is_some_and(|p| p.stretch_window);
-        if should_enable && stretch && !program.is_empty() {
-            self.stretcher.stretch(program);
-        } else if !stretch {
-            // 配置里已经关掉了，把窗口还回去
-            self.stretcher.restore();
-        }
 
         self.refresh_crosshair(should_enable);
     }
@@ -542,7 +517,6 @@ impl App {
                     program: p.program.clone(),
                     mappings: p.mappings.iter().map(mapping_view).collect(),
                     crosshair: p.crosshair,
-                    stretch_window: p.stretch_window,
                 })
                 .collect(),
             active_index: active,
@@ -946,7 +920,7 @@ impl App {
                     c.center_dot = v;
                 }
                 if let Some(v) = payload_cfg.get("center_dot_size").and_then(Value::as_u64) {
-                    c.center_dot_size = v.clamp(1, 20) as u32;
+                    c.center_dot_size = v.clamp(1, 40) as u32;
                 }
                 if let Some(v) = payload_cfg.get("offset_x").and_then(Value::as_i64) {
                     c.offset_x = (v as i32).clamp(-4000, 4000);
@@ -1023,33 +997,6 @@ impl App {
                 }
                 self.save()?;
                 self.refresh_now();
-                Ok(self.state()?)
-            }
-
-            "setStretchWindow" => {
-                let want = payload
-                    .get("enabled")
-                    .and_then(Value::as_bool)
-                    .ok_or("missing enabled")?;
-                let idx = self
-                    .settings
-                    .active_profile_index
-                    .min(self.settings.profiles.len().saturating_sub(1));
-                let is_global = self
-                    .settings
-                    .profiles
-                    .get(idx)
-                    .map(|p| p.program.is_empty())
-                    .unwrap_or(true);
-                if is_global {
-                    return Err("全局配置没有绑定的程序，无法拉伸窗口".into());
-                }
-                if let Some(p) = self.settings.profiles.get_mut(idx) {
-                    p.stretch_window = want;
-                }
-                self.save()?;
-                // 立刻生效/撤销，不用等下一轮轮询
-                self.reapply();
                 Ok(self.state()?)
             }
 

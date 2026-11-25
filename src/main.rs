@@ -13,7 +13,6 @@ mod server;
 mod single_instance;
 mod settings;
 mod socd;
-mod stretch;
 mod win;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -156,8 +155,6 @@ fn build_tray(url: String) -> Result<(), Box<dyn std::error::Error>> {
                 server::open_browser(&menu_url);
             } else if ev.id == quit_id {
                 logging::warn("从托盘退出");
-                // 刻意不还原被拉伸的窗口：程序关掉后，那个窗口保持拉满，
-                // 下次开游戏直接是全屏，省得再拉一次。
                 std::process::exit(0);
             }
         }
